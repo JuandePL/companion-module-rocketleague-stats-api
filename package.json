@@ -24,7 +24,7 @@
 	},
 	"dependencies": {
 		"@companion-module/base": "~2.2.2",
-		"rocketleague-stats-api-client": "file:../../../claude/rocketleague-stats-api-client"
+		"@juande_pl/rocketleague-stats-api-client": "^1.0.0"
 	},
 	"devDependencies": {
 		"@companion-module/tools": "^3.2.0",
