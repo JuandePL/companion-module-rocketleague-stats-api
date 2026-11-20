@@ -6,7 +6,7 @@ import {
 } from '@companion-module/base'
 import type ModuleInstance from './main.js'
 import type { ModuleSchema } from './main.js'
-import type { Side } from './series.js'
+import { SERIES_CONTROL_LABEL, type Side } from './series.js'
 
 /**
  * Prefix used in preset expressions. Companion replaces it with the connection's label when the
@@ -635,17 +635,22 @@ function endTimeoutPreset(): LayeredPreset {
 	}
 }
 
-function seriesControlPreset(mode: 'start' | 'restart' | 'stop'): LayeredPreset {
-	const label = { start: 'START SERIES', restart: 'RESTART SERIES', stop: 'STOP SERIES' }[mode]
+function seriesControlPreset(mode: 'start' | 'restart' | 'stop' | 'removeLast'): LayeredPreset {
+	const label = SERIES_CONTROL_LABEL[mode].toUpperCase()
 	const status = mode === 'stop' ? 'stopped' : 'running'
+	const notes = {
+		start:
+			'Starts a new series with the connection options: clears the stored matches. Green while a series is running.',
+		restart: 'Starts the series again: clears the stored matches. Green while a series is running.',
+		stop: 'Stops recording the series (and the automatic start). Red while the series is stopped.',
+		removeLast:
+			'Takes back the last recorded match, for example one that should not count. Green while a series is running.',
+	}[mode]
 	return {
 		type: 'layered',
-		name: label.charAt(0) + label.slice(1).toLowerCase(),
+		name: SERIES_CONTROL_LABEL[mode],
 		keywords: ['series', mode, 'esports'],
-		notes:
-			mode === 'stop'
-				? 'Stops recording the series (and the automatic start). Red while the series is stopped.'
-				: `${mode === 'start' ? 'Starts a new series with the connection options' : 'Starts the series again'}: clears the stored matches. Green while a series is running.`,
+		notes: `${notes} Needs two presses to confirm.`,
 		canvas: { decoration: ButtonGraphicsDecorationType.None },
 		elements: [
 			{ type: 'box', id: 'background', name: 'Background', x: 0, y: 0, width: 100, height: 100, color: COLOR_IDLE },
@@ -694,6 +699,101 @@ function seriesControlPreset(mode: 'start' | 'restart' | 'stop'): LayeredPreset 
 	}
 }
 
+function seriesPausePreset(): LayeredPreset {
+	return {
+		type: 'layered',
+		name: 'Pause / resume series',
+		keywords: ['series', 'pause', 'resume', 'showmatch', 'esports'],
+		notes:
+			'While the series is paused, the matches that end are not recorded (for example a showmatch). Orange while paused.',
+		canvas: { decoration: ButtonGraphicsDecorationType.None },
+		elements: [
+			{ type: 'box', id: 'background', name: 'Background', x: 0, y: 0, width: 100, height: 100, color: COLOR_IDLE },
+			textElement(
+				'label',
+				'Label',
+				{ x: 4, y: 4, width: 92, height: 92 },
+				expr(`${v('seriesPaused')} ? 'SERIES PAUSED' : 'PAUSE SERIES'`),
+				30,
+				{ weight: 'bold' },
+			),
+		],
+		feedbacks: [
+			{
+				feedbackId: 'series_status',
+				options: { status: 'paused' },
+				styleOverrides: [
+					{ elementId: 'background', elementProperty: 'color', override: COLOR_PAUSED },
+					{ elementId: 'label', elementProperty: 'color', override: 0x000000 },
+				],
+			},
+		],
+		steps: [{ down: [{ actionId: 'series_pause', options: { mode: 'toggle' } }], up: [] }],
+	}
+}
+
+function seriesWinPreset(side: Side, delta: 1 | -1): LayeredPreset {
+	const Side = side === 'blue' ? 'Blue' : 'Orange'
+	const teamColor = teamColorExpr(String(SIDE_COLOR_INDEX[side]), FALLBACK_TEAM_COLORS[SIDE_COLOR_INDEX[side]])
+	const sign = delta > 0 ? '+1' : '−1'
+	return {
+		type: 'layered',
+		name: `${Side} ${sign} win`,
+		keywords: ['series', 'wins', 'score', 'manual', side],
+		notes: `${delta > 0 ? 'Adds a series win to' : 'Removes a series win from'} the team on the ${Side} side, by hand.`,
+		canvas: { decoration: ButtonGraphicsDecorationType.None },
+		elements: [
+			{ type: 'box', id: 'background', name: 'Background', x: 0, y: 0, width: 100, height: 100, color: COLOR_IDLE },
+			{ type: 'box', id: 'teamStripe', name: 'Team color', x: 0, y: 0, width: 100, height: 8, color: expr(teamColor) },
+			textElement('team', 'Team name', { x: 4, y: 10, width: 92, height: 30 }, expr(`${v(`series${Side}Name`)}`), 50),
+			textElement('sign', 'Change', { x: 4, y: 40, width: 92, height: 28 }, `${sign} WIN`, 60, { weight: 'bold' }),
+			textElement(
+				'wins',
+				'Wins',
+				{ x: 4, y: 68, width: 92, height: 28 },
+				expr(`concat(${v(`series${Side}Wins`)})`),
+				60,
+				{ font: 'companion-mono' },
+			),
+		],
+		feedbacks: [],
+		steps: [
+			{
+				down: [
+					{
+						actionId: 'series_wins',
+						options: { team: side, name: '', mode: delta > 0 ? 'add' : 'remove', value: 1 },
+					},
+				],
+				up: [],
+			},
+		],
+	}
+}
+
+function swapTeamNamesPreset(): LayeredPreset {
+	return {
+		type: 'layered',
+		name: 'Swap team names',
+		keywords: ['series', 'teams', 'names', 'swap', 'sides'],
+		notes: 'Swaps the team names set by hand for Blue and Orange, when the teams switch sides.',
+		canvas: { decoration: ButtonGraphicsDecorationType.None },
+		elements: [
+			{ type: 'box', id: 'background', name: 'Background', x: 0, y: 0, width: 100, height: 100, color: COLOR_IDLE },
+			textElement('label', 'Label', { x: 4, y: 4, width: 92, height: 30 }, 'SWAP NAMES', 50, { weight: 'bold' }),
+			textElement(
+				'names',
+				'Names',
+				{ x: 4, y: 36, width: 92, height: 60 },
+				expr(`concat(${v('seriesBlueName')}, '\\n', ${v('seriesOrangeName')})`),
+				40,
+			),
+		],
+		feedbacks: [],
+		steps: [{ down: [{ actionId: 'set_team_names', options: { mode: 'swap', blue: '', orange: '' } }], up: [] }],
+	}
+}
+
 export function UpdatePresets(self: ModuleInstance): void {
 	const presets: CompanionPresetDefinitions<ModuleSchema> = {
 		scoreboard: scoreboardPreset(),
@@ -709,6 +809,13 @@ export function UpdatePresets(self: ModuleInstance): void {
 		series_start: seriesControlPreset('start'),
 		series_restart: seriesControlPreset('restart'),
 		series_stop: seriesControlPreset('stop'),
+		series_remove_last: seriesControlPreset('removeLast'),
+		series_pause: seriesPausePreset(),
+		series_blue_win: seriesWinPreset('blue', 1),
+		series_orange_win: seriesWinPreset('orange', 1),
+		series_blue_unwin: seriesWinPreset('blue', -1),
+		series_orange_unwin: seriesWinPreset('orange', -1),
+		series_swap_names: swapTeamNamesPreset(),
 	}
 	const playerIds: string[] = []
 	for (let index = 0; index < PLAYER_PRESETS; index++) {
@@ -763,7 +870,19 @@ export function UpdatePresets(self: ModuleInstance): void {
 					id: 'series_control',
 					name: 'Series control',
 					type: 'simple',
-					presets: ['series_start', 'series_restart', 'series_stop'],
+					presets: ['series_start', 'series_restart', 'series_stop', 'series_remove_last', 'series_pause'],
+				},
+				{
+					id: 'series_manual',
+					name: 'Wins and team names',
+					type: 'simple',
+					presets: [
+						'series_blue_win',
+						'series_orange_win',
+						'series_blue_unwin',
+						'series_orange_unwin',
+						'series_swap_names',
+					],
 				},
 			],
 		},

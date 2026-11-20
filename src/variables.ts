@@ -53,6 +53,8 @@ export type VariablesSchema = {
 
 	// Series (EsportsSeries)
 	seriesStatus: string
+	/** The series is paused: matches that end are not recorded. */
+	seriesPaused: boolean
 	seriesGames: number
 	seriesFormat: string
 	seriesMatchesPlayed: number
@@ -67,6 +69,9 @@ export type VariablesSchema = {
 	seriesOrangeName: string
 	seriesBlueWins: number
 	seriesOrangeWins: number
+	/** Wins added or removed by hand, already counted in the wins. */
+	seriesBlueManualWins: number
+	seriesOrangeManualWins: number
 	seriesBlueWinPercent: number
 	seriesOrangeWinPercent: number
 	seriesBlueShootingPercent: number
@@ -86,8 +91,12 @@ export type VariablesSchema = {
 	timeoutElapsedSeconds: number
 	timeoutElapsed: string
 
-	/** Series control waiting for its confirmation press: `start`, `restart`, `stop`, or empty. */
+	/** Series control waiting for its confirmation press: `start`, `restart`, `stop`, `removeLast`, or empty. */
 	seriesControlArmed: string
+
+	/** Team names set by hand for each side (empty: the names set in the game). */
+	teamNameBlue: string
+	teamNameOrange: string
 }
 
 export function UpdateVariableDefinitions(self: ModuleInstance): void {
@@ -120,7 +129,8 @@ export function UpdateVariableDefinitions(self: ModuleInstance): void {
 		lastMatch: { name: 'Last finished match summary (JSON)' },
 		lastAbortedMatch: { name: 'Last match left before its end (JSON)' },
 
-		seriesStatus: { name: 'Series status (idle, running, finished, stopped)' },
+		seriesStatus: { name: 'Series status (idle, running, paused, finished, stopped)' },
+		seriesPaused: { name: 'The series is paused (matches are not recorded)' },
 		seriesGames: { name: 'Games in the series' },
 		seriesFormat: { name: 'Series format (best-of, play-all)' },
 		seriesMatchesPlayed: { name: 'Finished matches in the series' },
@@ -135,6 +145,8 @@ export function UpdateVariableDefinitions(self: ModuleInstance): void {
 		seriesOrangeName: { name: 'Series: name of the Orange team' },
 		seriesBlueWins: { name: 'Series: Blue team wins' },
 		seriesOrangeWins: { name: 'Series: Orange team wins' },
+		seriesBlueManualWins: { name: 'Series: wins added or removed by hand for the Blue team' },
+		seriesOrangeManualWins: { name: 'Series: wins added or removed by hand for the Orange team' },
 		seriesBlueWinPercent: { name: 'Series: Blue team win %' },
 		seriesOrangeWinPercent: { name: 'Series: Orange team win %' },
 		seriesBlueShootingPercent: { name: 'Series: Blue team shooting %' },
@@ -153,7 +165,12 @@ export function UpdateVariableDefinitions(self: ModuleInstance): void {
 		timeoutElapsedSeconds: { name: 'Seconds since the timeout was called' },
 		timeoutElapsed: { name: 'Time since the timeout was called (m:ss)' },
 
-		seriesControlArmed: { name: 'Series control waiting for the confirmation press (start, restart, stop or empty)' },
+		seriesControlArmed: {
+			name: 'Series control waiting for the confirmation press (start, restart, stop, removeLast or empty)',
+		},
+
+		teamNameBlue: { name: 'Team name set by hand for Blue (empty: the game name)' },
+		teamNameOrange: { name: 'Team name set by hand for Orange (empty: the game name)' },
 	})
 }
 

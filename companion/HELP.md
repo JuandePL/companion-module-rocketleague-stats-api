@@ -20,17 +20,19 @@ When Rocket League runs on the same computer as Companion, the module can check 
 
 ### Configuration
 
-| Field                      | Description                                                                                 |
-| -------------------------- | ------------------------------------------------------------------------------------------- |
-| Host                       | Computer running Rocket League. `127.0.0.1` for the same computer.                          |
-| WebPort                    | `WebPort` from `TAStatsAPI.ini`. Default `49124`.                                           |
-| Games in the series        | Matches in the series. Default `5`.                                                         |
-| Format                     | **Best of** (ends when a team wins more than half) or **Play all games**.                   |
-| Start series automatically | Records without pressing Start, and starts a new series after each one ends. On by default. |
-| Timeouts per team          | Timeouts each team can call between matches. `0` (default) turns them off.                  |
-| Timeout length (seconds)   | `0` (default): the timeout lasts until **End timeout** is pressed or the next match starts. |
+| Field                                   | Description                                                                                         |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Host                                    | Computer running Rocket League. `127.0.0.1` for the same computer.                                  |
+| WebPort                                 | `WebPort` from `TAStatsAPI.ini`. Default `49124`.                                                   |
+| Games in the series                     | Matches in the series. Default `5`.                                                                 |
+| Format                                  | **Best of** (ends when a team wins more than half) or **Play all games**.                           |
+| Start series automatically              | Records without pressing Start, and starts a new series after each one ends. On by default.         |
+| Timeouts per team                       | Timeouts each team can call between matches. `0` (default) turns them off.                          |
+| Timeout length (seconds)                | `0` (default): the timeout lasts until **End timeout** is pressed or the next match starts.         |
+| Keep the series when Companion restarts | Saves the recorded matches, manual wins and timeouts, and brings them back on start. On by default. |
+| Blue team name / Orange team name       | Name used in the results for the team playing that side. Empty (default): the name set in the game. |
 
-The module reconnects automatically, so it can be started before the game. The series is kept when the connection drops. Changing a series option starts a new series.
+The module reconnects automatically, so it can be started before the game. The series is kept when the connection drops. Changing the games, format or timeouts keeps the recorded matches: the series ends, or goes on again, with the new options (for example a best of 5 turned into a best of 7).
 
 ### Esports series
 
@@ -39,6 +41,10 @@ Every match played is recorded as part of a series, with results per team, per p
 - Only matches that end count. A match left before its end (the lobby is destroyed without the match ending) is kept apart: it doesn't count for the wins, the totals or the end of the series.
 - **Timeouts**: with **Timeouts per team** above `0`, each team can call timeouts between the end of a match and the start of the next one. A timeout ends with **End timeout**, when its time runs out, or when the next match starts.
 - **Blue / Orange** in actions, feedbacks and variables mean the team playing on that side in the current match, or in the last finished one when there is no match. Teams are identified by name in the series, so they can switch sides between matches.
+- **Team names**: set your own names for each side (connection config or **Series: set team names**), for example the names of the broadcast when the ones set in the game don't match. Each finished match keeps the names it was played with. When the teams switch sides, use **Swap names**.
+- **Pause**: while the series is paused, the matches that end are not recorded and no timeout can be called, for example for a showmatch between two matches.
+- **Manual wins**: add, remove or set the wins of a team by hand, to fix the score or count a match played elsewhere. **Remove last match** takes back a recorded match that shouldn't count. The series ends, or goes on again, with these changes.
+- **Restart of Companion**: with **Keep the series when Companion restarts**, the series is saved in the connection config after every change and brought back on start. A match being played when Companion stops is not saved.
 
 ### Actions
 
@@ -55,15 +61,18 @@ One action per Stats API command. Most of them only work while spectating a matc
 
 Series actions (handled by the module, nothing is sent to the game):
 
-| Action                         | Options                                                                                     |
-| ------------------------------ | ------------------------------------------------------------------------------------------- |
-| Series: start / restart / stop | Start (config options) / Restart (same options) / Stop. Start and Restart clear the matches |
-| Series: call timeout           | Team: Blue, Orange or by name                                                               |
-| Series: end timeout            | Ends the running timeout early                                                              |
+| Action                                             | Options                                                                                                         |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Series: start / restart / stop / remove last match | Start (config options) / Restart (same options) / Stop / Remove last match. Start and Restart clear the matches |
+| Series: call timeout                               | Team: Blue, Orange or by name                                                                                   |
+| Series: end timeout                                | Ends the running timeout early                                                                                  |
+| Series: pause / resume                             | Pause / Resume / Toggle                                                                                         |
+| Series: change wins by hand                        | Team (Blue, Orange or by name), Add / Remove / Set, number of wins                                              |
+| Series: set team names                             | Set names (Blue and Orange) / Swap names / Clear                                                                |
 
 A refused timeout (no timeouts left, a match being played, another timeout running…) is written to the log with the reason.
 
-**Start**, **Restart** and **Stop** ask for confirmation by default (**Press twice to confirm**): the first press arms the action, and only a second press of the same action within **Seconds to confirm** (3 by default) runs it. Pressing another one arms that one instead. While it waits, the `seriesControlArmed` variable holds `start`, `restart` or `stop`, and the **Series control waits for confirmation** feedback is true.
+**Start**, **Restart**, **Stop** and **Remove last match** ask for confirmation by default (**Press twice to confirm**): the first press arms the action, and only a second press of the same action within **Seconds to confirm** (3 by default) runs it. Pressing another one arms that one instead. While it waits, the `seriesControlArmed` variable holds `start`, `restart`, `stop` or `removeLast`, and the **Series control waits for confirmation** feedback is true.
 
 ### Variables
 
@@ -115,13 +124,15 @@ Series totals update live: they include the match being played, without its win 
 
 | Variable                                                    | Description                                                                                                                                                    |
 | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `seriesStatus`                                              | `idle`, `running`, `finished` or `stopped`                                                                                                                     |
+| `seriesStatus`                                              | `idle`, `running`, `paused`, `finished` or `stopped`                                                                                                           |
+| `seriesPaused`                                              | The series is paused                                                                                                                                           |
 | `seriesGames` / `seriesFormat`                              | Options of the series                                                                                                                                          |
 | `seriesMatchesPlayed`                                       | Finished matches                                                                                                                                               |
 | `seriesAbortedMatches`                                      | Matches left before their end (they don't count)                                                                                                               |
 | `seriesWinner` / `seriesMvp`                                | Winner (once over) and MVP                                                                                                                                     |
 | `seriesBlueName` / `seriesOrangeName`                       | Team on each side                                                                                                                                              |
 | `seriesBlueWins` / `seriesOrangeWins`                       | Wins                                                                                                                                                           |
+| `seriesBlueManualWins` / `seriesOrangeManualWins`           | Wins added or removed by hand (already counted in the wins)                                                                                                    |
 | `seriesBlueWinPercent` / `seriesOrangeWinPercent`           | Wins over finished matches                                                                                                                                     |
 | `seriesBlueShootingPercent` / `seriesOrangeShootingPercent` | Goals over shots in the series                                                                                                                                 |
 | `seriesBlueBoostPerMinute` / `seriesOrangeBoostPerMinute`   | Boost used per minute of play                                                                                                                                  |
@@ -130,6 +141,7 @@ Series totals update live: they include the match being played, without its win 
 | `seriesTeams`                                               | Each team: `matches`, `wins`, `winPercent`, `goals`, `shots`, `shootingPercent`, `possessionPercent`, `boostPerMinute`, `timeoutsUsed`, `timeoutsLeft`… (JSON) |
 | `seriesPlayers`                                             | Each player: `wins`, `winPercent`, `mvps`, `shootingPercent`, `goalParticipation`, `boostPerMinute`, `secondsPlayed`… (JSON)                                   |
 | `seriesTimeouts`                                            | Every timeout called in the series (JSON)                                                                                                                      |
+| `teamNameBlue` / `teamNameOrange`                           | Team names set by hand (empty: the game names)                                                                                                                 |
 
 #### Timeouts
 
@@ -150,22 +162,22 @@ Examples:
 
 ### Feedbacks
 
-| Feedback                              | True when                                                                                      |
-| ------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Player has the POV                    | The camera is on player N of the `players` variable                                            |
-| Director camera is active             | The last perspective sent with Change POV is Director                                          |
-| Match is paused                       | The match is paused                                                                            |
-| Time remaining below                  | The clock is below N seconds, outside overtime                                                 |
-| Match is in overtime                  | The match is in overtime                                                                       |
-| Replay is active                      | A goal replay or history replay is playing                                                     |
-| A team has won                        | A team has won the match                                                                       |
-| Match is being played                 | The match started (not in the lobby) and hasn't ended                                          |
-| Match was left before its end         | The lobby was destroyed without the match ending, until the next match starts                  |
-| Series status                         | The series is running, finished, stopped or not started                                        |
-| Series control waits for confirmation | After the first press of a Start / Restart / Stop that needs two presses (any, or one of them) |
-| Timeout is running                    | A timeout is running (any team, Blue or Orange)                                                |
-| Team can call a timeout               | The team (Blue or Orange) can call a timeout right now                                         |
-| Team has timeouts left                | The team (Blue or Orange) still has timeouts in the series                                     |
+| Feedback                              | True when                                                                                                          |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Player has the POV                    | The camera is on player N of the `players` variable                                                                |
+| Director camera is active             | The last perspective sent with Change POV is Director                                                              |
+| Match is paused                       | The match is paused                                                                                                |
+| Time remaining below                  | The clock is below N seconds, outside overtime                                                                     |
+| Match is in overtime                  | The match is in overtime                                                                                           |
+| Replay is active                      | A goal replay or history replay is playing                                                                         |
+| A team has won                        | A team has won the match                                                                                           |
+| Match is being played                 | The match started (not in the lobby) and hasn't ended                                                              |
+| Match was left before its end         | The lobby was destroyed without the match ending, until the next match starts                                      |
+| Series status                         | The series is running, paused, finished, stopped or not started                                                    |
+| Series control waits for confirmation | After the first press of a Start / Restart / Stop / Remove last match that needs two presses (any, or one of them) |
+| Timeout is running                    | A timeout is running (any team, Blue or Orange)                                                                    |
+| Team can call a timeout               | The team (Blue or Orange) can call a timeout right now                                                             |
+| Team has timeouts left                | The team (Blue or Orange) still has timeouts in the series                                                         |
 
 The Stats API does not report the current camera mode, so **Director camera is active** follows the commands sent by this module. Focusing a player switches it off.
 
@@ -180,6 +192,9 @@ The Stats API does not report the current camera mode, so **Director camera is a
 - **Series score**: series wins of each team on top of its color, with `GAME n/m` (or `FINAL`) at the top.
 - **Blue timeout** / **Orange timeout**: calls a timeout for that team and shows its timeouts left. Green while it can call one, orange while its timeout runs.
 - **Timeout clock / end timeout**: team on timeout and the time left (or elapsed, without a time limit). Press to end it.
-- **Start / Restart / Stop series**: green while the series runs (red for Stop while it's stopped). They need two presses: after the first one the button turns orange and shows `PRESS AGAIN` for 3 seconds.
+- **Start / Restart / Stop series** / **Remove last match**: green while the series runs (red for Stop while it's stopped). They need two presses: after the first one the button turns orange and shows `PRESS AGAIN` for 3 seconds.
+- **Pause / resume series**: orange while the series is paused.
+- **Blue / Orange +1 win** and **−1 win**: change the series wins of that team by hand, with its name and wins.
+- **Swap team names**: swaps the names set by hand for Blue and Orange, when the teams switch sides.
 
 Presets use layered buttons and need Companion 5.0 or later.
