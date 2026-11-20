@@ -1,21 +1,45 @@
 import { InstanceBase, InstanceStatus, type SomeCompanionConfigField } from '@companion-module/base'
 import {
 	CommandValidationError,
+	EsportsSeries,
 	NotConnectedError,
 	RocketLeagueStatsClient,
+	SeriesTimeoutError,
 	type CommandDataMap,
 	type CommandName,
 	type Perspective,
 	type Player,
+	type SeriesOptions,
+	type SeriesSnapshot,
+	type SeriesTimeoutRefusal,
 	type UpdateStateData,
 } from '@juande_pl/rocketleague-stats-api-client'
-import { DEFAULT_HOST, DEFAULT_PORT, GetConfigFields, isLocalHost, type ModuleConfig } from './config.js'
+import { DEFAULT_HOST, DEFAULT_PORT, GetConfigFields, connectionKey, isLocalHost, type ModuleConfig } from './config.js'
 import { UpdateVariableDefinitions, emptyStateVariables, stateVariables, type VariablesSchema } from './variables.js'
 import { UpgradeScripts } from './upgrades.js'
 import { UpdateActions, type ActionsSchema } from './actions.js'
 import { UpdateFeedbacks, type FeedbacksSchema } from './feedbacks.js'
 import { UpdatePresets } from './presets.js'
 import { sortPlayers } from './state.js'
+import {
+	EventRelay,
+	SERIES_CONTROL_LABEL,
+	SIDES,
+	TIMEOUT_REFUSAL_TEXT,
+	compactSnapshot,
+	customTeamName,
+	matchStatsVariables,
+	matchSummaryJson,
+	parseSnapshot,
+	seriesAutoStartFromConfig,
+	seriesOptionsFromConfig,
+	seriesPersistFromConfig,
+	seriesVariables,
+	sideTeamName,
+	timeoutVariables,
+	type SeriesControlMode,
+	type Side,
+} from './series.js'
 
 export type ModuleSchema = {
 	config: ModuleConfig
@@ -29,6 +53,31 @@ export { UpgradeScripts }
 
 /** Feedbacks that depend on `UpdateState`. */
 const STATE_FEEDBACKS = ['player_pov', 'time_below', 'overtime', 'replay_active', 'has_winner'] as const
+/** Feedbacks that depend on the match tracker and the series. */
+const SERIES_FEEDBACKS = [
+	'match_started',
+	'match_aborted',
+	'series_status',
+	'timeout_active',
+	'can_call_timeout',
+	'has_timeouts_left',
+] as const
+
+/** Minimum time between two updates of the tracker and series variables while a match is played. */
+const STATS_UPDATE_INTERVAL_MS = 250
+/** Wait after a change of the series before saving it, so a burst of changes is saved once. */
+const SNAPSHOT_SAVE_DELAY_MS = 1000
+
+function sameOptions(a: Required<SeriesOptions>, b: Required<SeriesOptions>): boolean {
+	return (
+		a.games === b.games && a.format === b.format && a.timeouts === b.timeouts && a.timeoutSeconds === b.timeoutSeconds
+	)
+}
+
+/** Side of a `TeamNum`, `undefined` for anything else than Blue (0) and Orange (1). */
+function sideOf(teamNum: number): Side | undefined {
+	return teamNum === 0 ? 'blue' : teamNum === 1 ? 'orange' : undefined
+}
 
 export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	config!: ModuleConfig // Setup in init()
@@ -44,7 +93,24 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	/** Last perspective sent with ChangePOV (the API does not report it). */
 	perspective: Perspective | undefined
 
+	/** Records the matches as an esports series. Its `tracker` has the live stats of the current match. */
+	series: EsportsSeries | undefined
+
 	#client: RocketLeagueStatsClient | undefined
+	/** Forwards the events of every client to the series, so it survives reconnections. */
+	readonly #relay = new EventRelay()
+	/** JSON of the series options the series was created with, to know when the config changed them. */
+	#seriesConfigKey = ''
+	#seriesUnsubscribers: (() => void)[] = []
+	#statsTimer: NodeJS.Timeout | undefined
+	#timeoutTimer: NodeJS.Timeout | undefined
+	/** Series control (start, restart, stop) waiting for its confirmation press. */
+	#armedSeriesControl: SeriesControlMode | undefined
+	#seriesControlTimer: NodeJS.Timeout | undefined
+	#snapshotTimer: NodeJS.Timeout | undefined
+	#seriesFeedbackKey = ''
+	#lastMatch: ReturnType<typeof matchSummaryJson> = null
+	#lastAbortedMatch: ReturnType<typeof matchSummaryJson> = null
 	#restartRequired = false
 	/** JSON of the last value sent for each variable, to only send the ones that changed. */
 	readonly #sentVariables = new Map<string, string>()
@@ -64,18 +130,40 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 
 		this.#resetMatchState()
 		this.#updateVariables({ isPaused: false, perspective: '', connected: false })
+		this.#createSeries(seriesPersistFromConfig(config) ? parseSnapshot(config.seriesSnapshot) : undefined)
 		this.#connect()
 	}
 
 	// When module gets deleted
 	async destroy(): Promise<void> {
 		this.#disconnect()
+		this.#saveSnapshotNow()
+		this.#disposeSeries()
 	}
 
 	async configUpdated(config: ModuleConfig): Promise<void> {
+		const previous = this.config
 		this.config = config
-		this.#disconnect()
-		this.#connect()
+		// Only a new host, port or .ini setting needs a new connection: the module also saves its own config
+		// (team names, the saved series), and that must not drop the connection.
+		if (connectionKey(previous) !== connectionKey(config)) {
+			this.#disconnect()
+			this.#connect()
+		}
+		if (this.#seriesKey() !== this.#seriesConfigKey) {
+			// `autoStart` is only read when the series is created: create it again and carry the stored series over.
+			const snapshot = this.series?.snapshot()
+			this.#disposeSeries()
+			this.#createSeries(snapshot)
+		} else {
+			this.#applySeriesOptions()
+		}
+		if (!seriesPersistFromConfig(config)) {
+			if (config.seriesSnapshot) this.#saveConfigPatch({ seriesSnapshot: '' })
+		} else {
+			this.#scheduleSnapshotSave()
+		}
+		this.#refreshSeries()
 	}
 
 	// Return config fields for web config
@@ -157,6 +245,367 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	}
 
 	// -----------------------------------------------------------------------
+	// Series
+	// -----------------------------------------------------------------------
+
+	/** Starts a new series with the options of the connection config. Clears the stored matches. */
+	startSeries(): void {
+		this.#disarmSeriesControl()
+		this.series?.start(seriesOptionsFromConfig(this.config))
+		this.#refreshSeries()
+	}
+
+	restartSeries(): void {
+		this.#disarmSeriesControl()
+		this.series?.restart()
+		this.#refreshSeries()
+	}
+
+	stopSeries(): void {
+		this.#disarmSeriesControl()
+		if (!this.series) return
+		this.series.stop()
+		this.log('info', 'Series stopped')
+		this.#refreshSeries()
+	}
+
+	/** Series control waiting for its confirmation press, if any. */
+	get seriesControlArmed(): SeriesControlMode | undefined {
+		return this.#armedSeriesControl
+	}
+
+	/**
+	 * Series control that needs two presses: the first one arms it for `seconds`, a second press of the same control
+	 * within that time runs it. Avoids clearing or stopping the series by accident. Pressing another control
+	 * arms that one instead.
+	 */
+	requestSeriesControl(mode: SeriesControlMode, seconds: number): void {
+		const label = SERIES_CONTROL_LABEL[mode]
+		if (this.#armedSeriesControl === mode) {
+			this.log('info', `${label}: confirmed`)
+			this.runSeriesControl(mode)
+			return
+		}
+		this.#disarmSeriesControl()
+		this.log('info', `Press ${label} again within ${seconds} s to confirm`)
+		this.#armedSeriesControl = mode
+		this.#seriesControlTimer = setTimeout(() => this.#disarmSeriesControl(), Math.max(1, seconds) * 1000)
+		this.#updateVariables({ seriesControlArmed: mode })
+		this.checkFeedbacks('series_control_armed')
+	}
+
+	runSeriesControl(mode: SeriesControlMode): void {
+		if (mode === 'stop') this.stopSeries()
+		else if (mode === 'restart') this.restartSeries()
+		else if (mode === 'removeLast') this.removeLastMatch()
+		else this.startSeries()
+	}
+
+	/** Takes back the last recorded match, for example one that shouldn't count. */
+	removeLastMatch(): void {
+		this.#disarmSeriesControl()
+		const removed = this.series?.removeLastMatch()
+		if (!removed) {
+			this.log('warn', 'Remove last match: the series has no recorded match')
+			return
+		}
+		const winner = removed.teams.find((team) => team.TeamNum === removed.winnerTeamNum)?.Name ?? 'Unknown'
+		this.log('info', `Removed the last match of the series (won by ${winner})`)
+		this.#lastMatch = matchSummaryJson(this.series?.matches.at(-1))
+		this.#refreshSeries()
+	}
+
+	/**
+	 * Pauses or resumes the series. While paused, the matches that end are not recorded and no timeout can be
+	 * called, for example for a showmatch between two matches of the series.
+	 */
+	pauseSeries(mode: 'pause' | 'resume' | 'toggle'): void {
+		const series = this.series
+		if (!series) return
+		const pause = mode === 'toggle' ? !series.paused : mode === 'pause'
+		if (pause ? series.pause() : series.resume()) {
+			this.log('info', pause ? 'Series paused: matches are not recorded' : 'Series resumed')
+		} else {
+			this.log('warn', pause ? 'Pause series: the series is not running' : 'Resume series: the series is not paused')
+		}
+		this.#refreshSeries()
+	}
+
+	/** Adds (or removes, with a negative `delta`) series wins to a team by hand. */
+	adjustWins(team: string, delta: number): void {
+		this.#changeWins(team, (series) => series.adjustWins(team, Math.round(delta)))
+	}
+
+	/** Sets the series wins of a team by hand. */
+	setWins(team: string, wins: number): void {
+		this.#changeWins(team, (series) => series.setWins(team, Math.max(0, Math.round(wins))))
+	}
+
+	#changeWins(team: string, change: (series: EsportsSeries) => number): void {
+		const series = this.series
+		if (!series) return
+		if (!['running', 'paused', 'finished'].includes(series.status)) {
+			this.log('warn', `Series wins: the series is ${series.status}, start it first`)
+			return
+		}
+		try {
+			this.log('info', `${team} has ${change(series)} series win(s)`)
+		} catch (error) {
+			this.log('warn', `Series wins: ${error instanceof Error ? error.message : String(error)}`)
+		}
+		this.#refreshSeries()
+	}
+
+	/** Team names set by hand for each side (empty: the game's). */
+	get customTeamNames(): Record<Side, string> {
+		return { blue: customTeamName(this.config, 'blue'), orange: customTeamName(this.config, 'orange') }
+	}
+
+	/** Sets, swaps or clears the team names set by hand, and saves them in the connection config. */
+	setTeamNames(mode: 'set' | 'swap' | 'clear', names: Partial<Record<Side, string>> = {}): void {
+		const current = this.customTeamNames
+		const next =
+			mode === 'swap'
+				? { blue: current.orange, orange: current.blue }
+				: mode === 'clear'
+					? { blue: '', orange: '' }
+					: { blue: names.blue?.trim() ?? current.blue, orange: names.orange?.trim() ?? current.orange }
+		this.#saveConfigPatch({ teamNameBlue: next.blue, teamNameOrange: next.orange })
+		const show = (name: string) => name || '(game name)'
+		this.log('info', `Team names: Blue ${show(next.blue)}, Orange ${show(next.orange)}`)
+		this.#refreshSeries()
+	}
+
+	/** Changes some fields of the config and saves it, without reconnecting. */
+	#saveConfigPatch(patch: Partial<ModuleConfig>): void {
+		this.config = { ...this.config, ...patch }
+		this.saveConfig(this.config)
+	}
+
+	/** Applies the series options of the config to the series, keeping its matches. */
+	#applySeriesOptions(): void {
+		const series = this.series
+		if (!series) return
+		const next = seriesOptionsFromConfig(this.config)
+		if (sameOptions(series.options, next)) return
+		try {
+			series.setOptions(next)
+			const format = next.format === 'best-of' ? 'best of' : 'play all'
+			this.log('info', `Series options changed (${format} ${next.games}): the recorded matches are kept`)
+		} catch (error) {
+			this.log('warn', `Series options not applied: ${error instanceof Error ? error.message : String(error)}`)
+		}
+	}
+
+	/** Saves the series in the config a moment after it changes (see {@link SNAPSHOT_SAVE_DELAY_MS}). */
+	#scheduleSnapshotSave(): void {
+		if (!seriesPersistFromConfig(this.config) || this.#snapshotTimer) return
+		this.#snapshotTimer = setTimeout(() => {
+			this.#snapshotTimer = undefined
+			this.#saveSnapshotNow()
+		}, SNAPSHOT_SAVE_DELAY_MS)
+	}
+
+	#saveSnapshotNow(): void {
+		if (this.#snapshotTimer) clearTimeout(this.#snapshotTimer)
+		this.#snapshotTimer = undefined
+		const series = this.series
+		if (!series || !seriesPersistFromConfig(this.config)) return
+		const json = JSON.stringify(compactSnapshot(series.snapshot()))
+		if (json !== this.config.seriesSnapshot) this.#saveConfigPatch({ seriesSnapshot: json })
+	}
+
+	#disarmSeriesControl(): void {
+		if (!this.#armedSeriesControl) return
+		clearTimeout(this.#seriesControlTimer)
+		this.#seriesControlTimer = undefined
+		this.#armedSeriesControl = undefined
+		this.#updateVariables({ seriesControlArmed: '' })
+		this.checkFeedbacks('series_control_armed')
+	}
+
+	/** Name of the team playing on `side` in the current match, or in the last finished match of the series. */
+	sideTeamName(side: Side): string {
+		const custom = customTeamName(this.config, side)
+		return this.series ? sideTeamName(this.series, side, custom) : custom
+	}
+
+	/** Why the team can't call a timeout right now, or `undefined` if it can. */
+	timeoutRefusal(team: string): SeriesTimeoutRefusal | undefined {
+		return this.series ? this.series.timeoutRefusal(team) : 'not-running'
+	}
+
+	timeoutsLeft(team: string): number {
+		return this.series?.timeoutsLeft(team) ?? 0
+	}
+
+	/** Calls a timeout for a team, by name. Refusals are logged, never thrown. Returns `true` when it was called. */
+	callTimeout(team: string): boolean {
+		if (!this.series) return false
+		try {
+			this.series.callTimeout(team)
+			return true
+		} catch (error) {
+			if (error instanceof SeriesTimeoutError) {
+				const reason = TIMEOUT_REFUSAL_TEXT[error.reason] ?? error.reason
+				this.log('warn', `Timeout for ${error.team || 'the team'} refused: ${reason}`)
+			} else {
+				this.log('error', `Call timeout failed: ${error instanceof Error ? error.message : String(error)}`)
+			}
+			return false
+		}
+	}
+
+	endTimeout(): void {
+		if (!this.series?.endTimeout()) this.log('debug', 'End timeout: no timeout is running')
+	}
+
+	/** The series options that can only be set when the series is created. The others change with `setOptions`. */
+	#seriesKey(): string {
+		return JSON.stringify([seriesAutoStartFromConfig(this.config)])
+	}
+
+	/** Creates the series, and brings back `snapshot` (a saved series) when given. */
+	#createSeries(snapshot?: SeriesSnapshot): void {
+		this.#seriesConfigKey = this.#seriesKey()
+		const series = new EsportsSeries(this.#relay, {
+			...seriesOptionsFromConfig(this.config),
+			autoStart: seriesAutoStartFromConfig(this.config),
+			// Read on every result, so a name changed with the Set team names action applies right away.
+			identifyTeam: (team) => {
+				const side = sideOf(team.TeamNum)
+				return side ? customTeamName(this.config, side) : ''
+			},
+		})
+		this.series = series
+		this.#lastMatch = null
+		this.#lastAbortedMatch = null
+
+		this.#seriesUnsubscribers = [
+			series.onUpdate(() => this.#scheduleSnapshotSave()),
+			series.tracker.onMatchStart(() => this.#refreshSeries()),
+			series.onSeriesStart((options) => {
+				const format = options.format === 'best-of' ? 'best of' : 'play all'
+				this.log('info', `Series started: ${format} ${options.games}`)
+				this.#refreshSeries()
+			}),
+			series.onMatchEnd((match, result) => {
+				this.#lastMatch = matchSummaryJson(match)
+				const winner = match.teams.find((team) => team.TeamNum === match.winnerTeamNum)?.Name ?? 'Unknown'
+				this.log('info', `Game ${result.matches.length} of the series won by ${winner}`)
+				this.#refreshSeries()
+			}),
+			series.onMatchAbort((match) => {
+				this.#lastAbortedMatch = matchSummaryJson(match)
+				this.log('info', 'A match of the series was left before its end: it does not count')
+				this.#refreshSeries()
+			}),
+			series.onSeriesEnd((result) => {
+				this.log('info', result.winner ? `${result.winner} wins the series` : 'The series ended in a tie')
+				this.#refreshSeries()
+			}),
+			series.onTimeoutStart((timeout) => {
+				this.log('info', `Timeout called by ${timeout.team}`)
+				this.#startTimeoutTimer()
+				this.#refreshSeries()
+			}),
+			series.onTimeoutEnd((timeout) => {
+				this.log('info', `Timeout of ${timeout.team} ended (${timeout.endReason ?? 'ended'})`)
+				this.#stopTimeoutTimer()
+				this.#refreshSeries()
+			}),
+		]
+
+		if (snapshot) {
+			try {
+				series.restore(snapshot)
+				// The config wins over the options saved with the series.
+				this.#applySeriesOptions()
+				this.#lastMatch = matchSummaryJson(series.matches.at(-1))
+				this.#lastAbortedMatch = matchSummaryJson(series.abortedMatches.at(-1))
+				if (series.activeTimeout) this.#startTimeoutTimer()
+				this.log('info', `Series brought back: ${series.matches.length} match(es) recorded, ${series.status}`)
+			} catch (error) {
+				this.log(
+					'warn',
+					`Could not bring back the saved series: ${error instanceof Error ? error.message : String(error)}`,
+				)
+			}
+		}
+		this.#refreshSeries()
+	}
+
+	#disposeSeries(): void {
+		this.#disarmSeriesControl()
+		if (this.#snapshotTimer) clearTimeout(this.#snapshotTimer)
+		this.#snapshotTimer = undefined
+		for (const unsubscribe of this.#seriesUnsubscribers) unsubscribe()
+		this.#seriesUnsubscribers = []
+		this.series?.dispose()
+		this.series = undefined
+		this.#stopTimeoutTimer()
+		if (this.#statsTimer) clearTimeout(this.#statsTimer)
+		this.#statsTimer = undefined
+	}
+
+	/** Updates the tracker and series variables at most every {@link STATS_UPDATE_INTERVAL_MS}. */
+	#scheduleStatsUpdate(): void {
+		if (this.#statsTimer) return
+		this.#statsTimer = setTimeout(() => {
+			this.#statsTimer = undefined
+			this.#refreshSeries()
+		}, STATS_UPDATE_INTERVAL_MS)
+	}
+
+	/** Updates every tracker, series and timeout variable now, and re-checks their feedbacks. */
+	#refreshSeries(): void {
+		const series = this.series
+		if (!series) return
+		this.#updateVariables({
+			...matchStatsVariables(series),
+			...seriesVariables(series, this.customTeamNames),
+			...timeoutVariables(series),
+			teamNameBlue: customTeamName(this.config, 'blue'),
+			teamNameOrange: customTeamName(this.config, 'orange'),
+			lastMatch: this.#lastMatch,
+			lastAbortedMatch: this.#lastAbortedMatch,
+		})
+		this.#checkSeriesFeedbacks()
+	}
+
+	/** Updates the timeout clock every second while a timeout is running. */
+	#startTimeoutTimer(): void {
+		this.#stopTimeoutTimer()
+		this.#timeoutTimer = setInterval(() => {
+			if (this.series) this.#updateVariables(timeoutVariables(this.series))
+		}, 1000)
+	}
+
+	#stopTimeoutTimer(): void {
+		if (this.#timeoutTimer) clearInterval(this.#timeoutTimer)
+		this.#timeoutTimer = undefined
+	}
+
+	/** Re-checks the series feedbacks only when one of the values they read has changed. */
+	#checkSeriesFeedbacks(): void {
+		const series = this.series
+		if (!series) return
+		const key = JSON.stringify([
+			series.tracker.matchStarted,
+			series.tracker.matchAborted,
+			series.status,
+			series.activeTimeout?.team,
+			SIDES.map((side) => {
+				const team = this.sideTeamName(side)
+				return [team, series.timeoutRefusal(team), series.timeoutsLeft(team)]
+			}),
+		])
+		if (key === this.#seriesFeedbackKey) return
+		this.#seriesFeedbackKey = key
+		this.checkFeedbacks(...SERIES_FEEDBACKS)
+	}
+
+	// -----------------------------------------------------------------------
 	// Connection
 	// -----------------------------------------------------------------------
 
@@ -206,6 +655,13 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		client.on('error', (error) => this.log('debug', error.message))
 		client.on('invalidMessage', (failure) => {
 			this.log('debug', `Ignored an invalid message (${failure.reason})${failure.event ? `: ${failure.event}` : ''}`)
+		})
+
+		// Every game event goes to the series (and its match tracker) through the relay.
+		client.onAny((event) => {
+			this.#relay.emit(event)
+			if (event.Event === 'UpdateState') this.#scheduleStatsUpdate()
+			else this.#refreshSeries()
 		})
 
 		client.on('UpdateState', (data) => this.#handleUpdateState(data))

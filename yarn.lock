@@ -392,10 +392,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@juande_pl/rocketleague-stats-api-client@npm:^1.3.0":
-  version: 1.3.0
-  resolution: "@juande_pl/rocketleague-stats-api-client@npm:1.3.0"
-  checksum: 10c0/ce328eeabbbcaefe4d911f11e75a95681ad0be8488c3459100ac9a0c05ed0209ef2ee220171978ae4c9b3e495de35403f8e8a5319006ea8bdfa1a91265f22123
+"@juande_pl/rocketleague-stats-api-client@npm:^1.4.0":
+  version: 1.4.0
+  resolution: "@juande_pl/rocketleague-stats-api-client@npm:1.4.0"
+  checksum: 10c0/22471f723823d1523971bb89bc5c82e7f2797ad8e261cde44e106b3a0f9ba26c5bd4e1f6d8c2ad7064ea25997ecc9aa51ab6a9a4a46883888cce5c0b874798f3
   languageName: node
   linkType: hard
 
@@ -678,7 +678,7 @@ __metadata:
   dependencies:
     "@companion-module/base": "npm:~2.2.2"
     "@companion-module/tools": "npm:^3.2.0"
-    "@juande_pl/rocketleague-stats-api-client": "npm:^1.3.0"
+    "@juande_pl/rocketleague-stats-api-client": "npm:^1.4.0"
     "@types/node": "npm:^26.6.4"
     eslint: "npm:^10.12.0"
     husky: "npm:^9.1.7"

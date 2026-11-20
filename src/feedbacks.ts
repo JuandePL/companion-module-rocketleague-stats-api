@@ -1,4 +1,14 @@
+import type { DropdownChoice } from '@companion-module/base'
+import type { SeriesStatus } from '@juande_pl/rocketleague-stats-api-client'
 import type ModuleInstance from './main.js'
+import {
+	SERIES_CONTROL_LABEL,
+	SERIES_CONTROL_MODES,
+	SIDES,
+	SIDE_LABEL,
+	type SeriesControlMode,
+	type Side,
+} from './series.js'
 import { hasPov } from './state.js'
 
 export type FeedbacksSchema = {
@@ -34,7 +44,50 @@ export type FeedbacksSchema = {
 		type: 'boolean'
 		options: Record<string, never>
 	}
+	match_started: {
+		type: 'boolean'
+		options: Record<string, never>
+	}
+	match_aborted: {
+		type: 'boolean'
+		options: Record<string, never>
+	}
+	series_status: {
+		type: 'boolean'
+		options: {
+			status: SeriesStatus
+		}
+	}
+	series_control_armed: {
+		type: 'boolean'
+		options: {
+			mode: SeriesControlMode | 'any'
+		}
+	}
+	timeout_active: {
+		type: 'boolean'
+		options: {
+			team: SideOrAny
+		}
+	}
+	can_call_timeout: {
+		type: 'boolean'
+		options: {
+			team: Side
+		}
+	}
+	has_timeouts_left: {
+		type: 'boolean'
+		options: {
+			team: Side
+		}
+	}
 }
+
+type SideOrAny = Side | 'any'
+
+const SIDE_CHOICES: DropdownChoice<Side>[] = SIDES.map((id) => ({ id, label: SIDE_LABEL[id] }))
+const SIDE_NOTE = 'The team playing on that side in the current match, or in the last finished one.'
 
 export function UpdateFeedbacks(self: ModuleInstance): void {
 	self.setFeedbackDefinitions({
@@ -137,6 +190,124 @@ export function UpdateFeedbacks(self: ModuleInstance): void {
 			},
 			options: [],
 			callback: () => self.state?.Game.bHasWinner === true,
+		},
+		match_started: {
+			name: 'Match is being played',
+			description: 'True from the start of the match (not in the lobby) until it ends or is left.',
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: 0x16a34a,
+				color: 0xffffff,
+			},
+			options: [],
+			callback: () => self.series?.tracker.matchStarted === true,
+		},
+		match_aborted: {
+			name: 'Match was left before its end',
+			description: 'True after the lobby was destroyed without the match ending, until the next match starts.',
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: 0x7f1d1d,
+				color: 0xffffff,
+			},
+			options: [],
+			callback: () => self.series?.tracker.matchAborted === true,
+		},
+		series_status: {
+			name: 'Series status',
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: 0x16a34a,
+				color: 0xffffff,
+			},
+			options: [
+				{
+					id: 'status',
+					type: 'dropdown',
+					label: 'Status',
+					choices: [
+						{ id: 'running', label: 'Running' },
+						{ id: 'paused', label: 'Paused' },
+						{ id: 'finished', label: 'Finished' },
+						{ id: 'stopped', label: 'Stopped' },
+						{ id: 'idle', label: 'Not started' },
+					],
+					default: 'running',
+				},
+			],
+			callback: (feedback) => self.series?.status === feedback.options.status,
+		},
+		series_control_armed: {
+			name: 'Series control waits for confirmation',
+			description:
+				'True after the first press of a Start / Restart / Stop series or Remove last match that needs two presses, until it is confirmed or times out.',
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: 0xd97706,
+				color: 0x000000,
+			},
+			options: [
+				{
+					id: 'mode',
+					type: 'dropdown',
+					label: 'Control',
+					choices: [
+						{ id: 'any', label: 'Any' },
+						...SERIES_CONTROL_MODES.map((id) => ({ id, label: SERIES_CONTROL_LABEL[id] })),
+					],
+					default: 'any',
+				},
+			],
+			callback: (feedback) => {
+				const armed = self.seriesControlArmed
+				return armed !== undefined && (feedback.options.mode === 'any' || feedback.options.mode === armed)
+			},
+		},
+		timeout_active: {
+			name: 'Timeout is running',
+			description: `True while a timeout is running, for any team or for the team on one side. ${SIDE_NOTE}`,
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: 0xd97706,
+				color: 0x000000,
+			},
+			options: [
+				{
+					id: 'team',
+					type: 'dropdown',
+					label: 'Team',
+					choices: [{ id: 'any', label: 'Any' }, ...SIDE_CHOICES],
+					default: 'any',
+				},
+			],
+			callback: (feedback) => {
+				const timeout = self.series?.activeTimeout
+				if (!timeout) return false
+				const { team } = feedback.options
+				return team === 'any' || timeout.team === self.sideTeamName(team)
+			},
+		},
+		can_call_timeout: {
+			name: 'Team can call a timeout',
+			description: `True when the team can call a timeout right now. ${SIDE_NOTE}`,
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: 0x16a34a,
+				color: 0xffffff,
+			},
+			options: [{ id: 'team', type: 'dropdown', label: 'Team', choices: SIDE_CHOICES, default: 'blue' }],
+			callback: (feedback) => self.timeoutRefusal(self.sideTeamName(feedback.options.team)) === undefined,
+		},
+		has_timeouts_left: {
+			name: 'Team has timeouts left',
+			description: `True when the team still has timeouts to call in the series. ${SIDE_NOTE}`,
+			type: 'boolean',
+			defaultStyle: {
+				bgcolor: 0x1f6feb,
+				color: 0xffffff,
+			},
+			options: [{ id: 'team', type: 'dropdown', label: 'Team', choices: SIDE_CHOICES, default: 'blue' }],
+			callback: (feedback) => self.timeoutsLeft(self.sideTeamName(feedback.options.team)) > 0,
 		},
 	})
 }
