@@ -14,7 +14,23 @@ import {
 	type SeriesTimeoutRefusal,
 	type UpdateStateData,
 } from '@juande_pl/rocketleague-stats-api-client'
-import { DEFAULT_HOST, DEFAULT_PORT, GetConfigFields, connectionKey, isLocalHost, type ModuleConfig } from './config.js'
+import {
+	DEFAULT_HOST,
+	DEFAULT_PORT,
+	GetConfigFields,
+	connectionKey,
+	isLocalHost,
+	isSuiteMode,
+	type ModuleConfig,
+} from './config.js'
+import {
+	DEFAULT_SUITE_PORT,
+	SUITE_FEEDBACK_IDS,
+	SuiteLink,
+	suiteVariables,
+	timerVariables,
+	type SuiteCommand,
+} from './suite.js'
 import { UpdateVariableDefinitions, emptyStateVariables, stateVariables, type VariablesSchema } from './variables.js'
 import { UpgradeScripts } from './upgrades.js'
 import { UpdateActions, type ActionsSchema } from './actions.js'
@@ -97,6 +113,9 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	series: EsportsSeries | undefined
 
 	#client: RocketLeagueStatsClient | undefined
+	/** Connection to the broadcast suite server, in suite mode. It owns the series: this module only mirrors it. */
+	suite: SuiteLink | undefined
+	#suiteTimer: NodeJS.Timeout | undefined
 	/** Forwards the events of every client to the series, so it survives reconnections. */
 	readonly #relay = new EventRelay()
 	/** JSON of the series options the series was created with, to know when the config changed them. */
@@ -130,7 +149,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 
 		this.#resetMatchState()
 		this.#updateVariables({ isPaused: false, perspective: '', connected: false })
-		this.#createSeries(seriesPersistFromConfig(config) ? parseSnapshot(config.seriesSnapshot) : undefined)
+		this.#createSeries(this.#persistSeries() ? parseSnapshot(config.seriesSnapshot) : undefined)
 		this.#connect()
 	}
 
@@ -251,18 +270,30 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	/** Starts a new series with the options of the connection config. Clears the stored matches. */
 	startSeries(): void {
 		this.#disarmSeriesControl()
+		if (isSuiteMode(this.config)) {
+			this.sendSuiteCommand({ type: 'series.start' })
+			return
+		}
 		this.series?.start(seriesOptionsFromConfig(this.config))
 		this.#refreshSeries()
 	}
 
 	restartSeries(): void {
 		this.#disarmSeriesControl()
+		if (isSuiteMode(this.config)) {
+			this.sendSuiteCommand({ type: 'series.restart' })
+			return
+		}
 		this.series?.restart()
 		this.#refreshSeries()
 	}
 
 	stopSeries(): void {
 		this.#disarmSeriesControl()
+		if (isSuiteMode(this.config)) {
+			this.sendSuiteCommand({ type: 'series.stop' })
+			return
+		}
 		if (!this.series) return
 		this.series.stop()
 		this.log('info', 'Series stopped')
@@ -304,6 +335,10 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	/** Takes back the last recorded match, for example one that shouldn't count. */
 	removeLastMatch(): void {
 		this.#disarmSeriesControl()
+		if (isSuiteMode(this.config)) {
+			this.sendSuiteCommand({ type: 'series.undo' })
+			return
+		}
 		const removed = this.series?.removeLastMatch()
 		if (!removed) {
 			this.log('warn', 'Remove last match: the series has no recorded match')
@@ -320,6 +355,11 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	 * called, for example for a showmatch between two matches of the series.
 	 */
 	pauseSeries(mode: 'pause' | 'resume' | 'toggle'): void {
+		if (isSuiteMode(this.config)) {
+			const type = { pause: 'series.pause', resume: 'series.resume', toggle: 'series.togglePause' }[mode]
+			this.sendSuiteCommand({ type })
+			return
+		}
 		const series = this.series
 		if (!series) return
 		const pause = mode === 'toggle' ? !series.paused : mode === 'pause'
@@ -333,12 +373,33 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 
 	/** Adds (or removes, with a negative `delta`) series wins to a team by hand. */
 	adjustWins(team: string, delta: number): void {
+		if (isSuiteMode(this.config)) {
+			const slot = this.#suiteSlot(team, 'Series wins')
+			if (slot !== undefined) this.sendSuiteCommand({ type: 'series.adjust', slot, delta: Math.round(delta) })
+			return
+		}
 		this.#changeWins(team, (series) => series.adjustWins(team, Math.round(delta)))
 	}
 
 	/** Sets the series wins of a team by hand. */
 	setWins(team: string, wins: number): void {
-		this.#changeWins(team, (series) => series.setWins(team, Math.max(0, Math.round(wins))))
+		const value = Math.max(0, Math.round(wins))
+		if (isSuiteMode(this.config)) {
+			const slot = this.#suiteSlot(team, 'Series wins')
+			if (slot !== undefined) this.sendSuiteCommand({ type: 'series.setWins', slot, wins: value })
+			return
+		}
+		this.#changeWins(team, (series) => series.setWins(team, value))
+	}
+
+	/** Slot (left / right team) of the suite match where `team` plays, by its series name. Logs when it isn't there. */
+	#suiteSlot(team: string, what: string): number | undefined {
+		const slot = this.suite?.state?.series.keys.indexOf(team) ?? -1
+		if (slot < 0) {
+			this.log('warn', `${what}: ${team || 'the team'} is not in the match of the suite`)
+			return undefined
+		}
+		return slot
 	}
 
 	#changeWins(team: string, change: (series: EsportsSeries) => number): void {
@@ -356,13 +417,22 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		this.#refreshSeries()
 	}
 
-	/** Team names set by hand for each side (empty: the game's). */
+	/** Team names set by hand for each side (empty: the game's). In suite mode the server names the teams. */
 	get customTeamNames(): Record<Side, string> {
+		if (isSuiteMode(this.config)) return { blue: '', orange: '' }
 		return { blue: customTeamName(this.config, 'blue'), orange: customTeamName(this.config, 'orange') }
 	}
 
-	/** Sets, swaps or clears the team names set by hand, and saves them in the connection config. */
+	/**
+	 * Sets, swaps or clears the team names set by hand, and saves them in the connection config. In suite mode
+	 * the teams are set in the suite control panel: Swap swaps their colors there, Set and Clear do nothing.
+	 */
 	setTeamNames(mode: 'set' | 'swap' | 'clear', names: Partial<Record<Side, string>> = {}): void {
+		if (isSuiteMode(this.config)) {
+			if (mode === 'swap') this.sendSuiteCommand({ type: 'match.swapSides' })
+			else this.log('warn', 'Set team names: in Broadcast suite mode the teams are set in the suite control panel')
+			return
+		}
 		const current = this.customTeamNames
 		const next =
 			mode === 'swap'
@@ -385,7 +455,8 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	/** Applies the series options of the config to the series, keeping its matches. */
 	#applySeriesOptions(): void {
 		const series = this.series
-		if (!series) return
+		// In suite mode the options are set in the suite control panel: the series mirrors the server's.
+		if (!series || isSuiteMode(this.config)) return
 		const next = seriesOptionsFromConfig(this.config)
 		if (sameOptions(series.options, next)) return
 		try {
@@ -398,8 +469,13 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	}
 
 	/** Saves the series in the config a moment after it changes (see {@link SNAPSHOT_SAVE_DELAY_MS}). */
+	/** `true` when the series is saved in the config. Not in suite mode: the server keeps the series. */
+	#persistSeries(): boolean {
+		return seriesPersistFromConfig(this.config) && !isSuiteMode(this.config)
+	}
+
 	#scheduleSnapshotSave(): void {
-		if (!seriesPersistFromConfig(this.config) || this.#snapshotTimer) return
+		if (!this.#persistSeries() || this.#snapshotTimer) return
 		this.#snapshotTimer = setTimeout(() => {
 			this.#snapshotTimer = undefined
 			this.#saveSnapshotNow()
@@ -410,7 +486,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		if (this.#snapshotTimer) clearTimeout(this.#snapshotTimer)
 		this.#snapshotTimer = undefined
 		const series = this.series
-		if (!series || !seriesPersistFromConfig(this.config)) return
+		if (!series || !this.#persistSeries()) return
 		const json = JSON.stringify(compactSnapshot(series.snapshot()))
 		if (json !== this.config.seriesSnapshot) this.#saveConfigPatch({ seriesSnapshot: json })
 	}
@@ -426,7 +502,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 
 	/** Name of the team playing on `side` in the current match, or in the last finished match of the series. */
 	sideTeamName(side: Side): string {
-		const custom = customTeamName(this.config, side)
+		const custom = this.customTeamNames[side]
 		return this.series ? sideTeamName(this.series, side, custom) : custom
 	}
 
@@ -441,6 +517,14 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 
 	/** Calls a timeout for a team, by name. Refusals are logged, never thrown. Returns `true` when it was called. */
 	callTimeout(team: string): boolean {
+		if (isSuiteMode(this.config)) {
+			const slot = this.suite?.state?.series.keys.indexOf(team) ?? -1
+			if (slot < 0) {
+				this.log('warn', `Timeout for ${team || 'the team'} refused: the team is not in the match of the suite`)
+				return false
+			}
+			return this.sendSuiteCommand({ type: 'timeout.call', slot })
+		}
 		if (!this.series) return false
 		try {
 			this.series.callTimeout(team)
@@ -457,22 +541,44 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	}
 
 	endTimeout(): void {
+		if (isSuiteMode(this.config)) {
+			this.sendSuiteCommand({ type: 'timeout.end' })
+			return
+		}
 		if (!this.series?.endTimeout()) this.log('debug', 'End timeout: no timeout is running')
 	}
 
 	/** The series options that can only be set when the series is created. The others change with `setOptions`. */
 	#seriesKey(): string {
-		return JSON.stringify([seriesAutoStartFromConfig(this.config)])
+		// Switching to or from suite mode also creates the series again: in suite mode it mirrors the server's.
+		return JSON.stringify([seriesAutoStartFromConfig(this.config), isSuiteMode(this.config)])
+	}
+
+	/** Sends a command to the suite server. Refusals are logged. Returns `false` when not connected. */
+	sendSuiteCommand(cmd: SuiteCommand): boolean {
+		if (!this.suite) {
+			this.log('warn', `${cmd.type}: only available in Broadcast suite mode (connection config)`)
+			return false
+		}
+		if (!this.suite.send(cmd)) {
+			this.log('warn', `${cmd.type}: not connected to the suite server`)
+			return false
+		}
+		return true
 	}
 
 	/** Creates the series, and brings back `snapshot` (a saved series) when given. */
 	#createSeries(snapshot?: SeriesSnapshot): void {
 		this.#seriesConfigKey = this.#seriesKey()
+		const suite = isSuiteMode(this.config)
 		const series = new EsportsSeries(this.#relay, {
 			...seriesOptionsFromConfig(this.config),
-			autoStart: seriesAutoStartFromConfig(this.config),
-			// Read on every result, so a name changed with the Set team names action applies right away.
+			// In suite mode the series mirrors the server's (see #connectSuite): it never starts by itself.
+			autoStart: suite ? false : seriesAutoStartFromConfig(this.config),
+			// Suite mode: same team names as the suite server, so the live results match its series.
+			// Otherwise the names set by hand, read on every result so a change applies right away.
 			identifyTeam: (team) => {
+				if (suite) return this.suite?.state?.sides.teamKeys[team.TeamNum] ?? ''
 				const side = sideOf(team.TeamNum)
 				return side ? customTeamName(this.config, side) : ''
 			},
@@ -610,16 +716,21 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	// -----------------------------------------------------------------------
 
 	#connect(): void {
-		const host = this.config.host?.trim() || DEFAULT_HOST
-		const port = this.config.port || DEFAULT_PORT
-		const ensureStatsApi = this.config.ensureStatsApi !== false && isLocalHost(host)
+		const suite = isSuiteMode(this.config)
+		const suiteHost = this.config.suiteHost?.trim() || DEFAULT_HOST
+		const suitePort = this.config.suitePort || DEFAULT_SUITE_PORT
+		// In suite mode the game comes through the suite server's Stats API relay.
+		const host = suite ? suiteHost : this.config.host?.trim() || DEFAULT_HOST
+		const port = suite ? suitePort : this.config.port || DEFAULT_PORT
+		const ensureStatsApi = !suite && this.config.ensureStatsApi !== false && isLocalHost(host)
+		if (suite) this.#connectSuite(suiteHost, suitePort)
+		else this.#updateVariables(suiteVariables(undefined, false, Date.now()))
 
 		this.#restartRequired = false
 		this.updateStatus(InstanceStatus.Connecting)
 
 		const client = new RocketLeagueStatsClient({
-			host,
-			port,
+			...(suite ? { url: `ws://${host}:${port}/stats-api` } : { host, port }),
 			reconnect: { initialDelay: 1000, maxDelay: 5000 },
 			ensureStatsApi: ensureStatsApi ? { warn: (message) => this.log('warn', message) } : false,
 		})
@@ -671,7 +782,49 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		client.on('MatchDestroyed', () => this.#resetMatchState())
 	}
 
+	/** Connects to the suite server: its series replaces the local one, and its state fills the suite variables. */
+	#connectSuite(host: string, port: number): void {
+		const link = new SuiteLink(host, port, {
+			status: (connected) => {
+				this.log(
+					connected ? 'info' : 'debug',
+					connected ? `Connected to the suite server (${link.url})` : 'Disconnected from the suite server',
+				)
+				this.#refreshSuite()
+			},
+			state: () => this.#refreshSuite(),
+			series: (snapshot) => {
+				try {
+					this.series?.restore(snapshot)
+				} catch (error) {
+					this.log(
+						'warn',
+						`Could not read the series of the suite: ${error instanceof Error ? error.message : String(error)}`,
+					)
+				}
+				this.#refreshSeries()
+			},
+			error: (message) => this.log('warn', `Suite: ${message}`),
+		})
+		this.suite = link
+		this.#suiteTimer = setInterval(() => {
+			if (this.suite?.state?.config.timer.running)
+				this.#updateVariables(timerVariables(this.suite.state, this.suite.now()))
+		}, 250)
+	}
+
+	#refreshSuite(): void {
+		const link = this.suite
+		if (!link) return
+		this.#updateVariables(suiteVariables(link.state, link.connected, link.now()))
+		this.checkFeedbacks(...SUITE_FEEDBACK_IDS)
+	}
+
 	#disconnect(): void {
+		this.suite?.close()
+		this.suite = undefined
+		clearInterval(this.#suiteTimer)
+		this.#suiteTimer = undefined
 		const client = this.#client
 		this.#client = undefined
 		if (client) {

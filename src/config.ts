@@ -1,7 +1,12 @@
 import { Regex, type SomeCompanionConfigField } from '@companion-module/base'
 import { DEFAULT_SERIES_FORMAT, DEFAULT_SERIES_GAMES } from './series.js'
+import { DEFAULT_SUITE_PORT } from './suite.js'
 
 export type ModuleConfig = {
+	/** `direct`: to the game. `suite`: to the broadcast suite server, which shares the series with its panel and HUD. */
+	mode: 'direct' | 'suite'
+	suiteHost: string
+	suitePort: number
 	host: string
 	port: number
 	ensureStatsApi: boolean
@@ -20,7 +25,14 @@ export type ModuleConfig = {
 
 /** JSON of the fields that need a new connection to the game when they change. */
 export function connectionKey(config: ModuleConfig | undefined): string {
-	return JSON.stringify([config?.host, config?.port, config?.ensureStatsApi])
+	return JSON.stringify([
+		config?.mode,
+		config?.suiteHost,
+		config?.suitePort,
+		config?.host,
+		config?.port,
+		config?.ensureStatsApi,
+	])
 }
 
 export const DEFAULT_HOST = '127.0.0.1'
@@ -39,8 +51,49 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 				'This project is not affiliated with Psyonix or Epic Games.',
 		},
 		{
+			type: 'dropdown',
+			id: 'mode',
+			label: 'Connect to',
+			width: 12,
+			choices: [
+				{ id: 'direct', label: 'Rocket League (Stats API)' },
+				{ id: 'suite', label: 'Broadcast suite server (shares series, teams, stats and timer with its panel and HUD)' },
+			],
+			default: 'direct',
+		},
+		{
+			type: 'static-text',
+			id: 'suiteInfo',
+			label: 'Broadcast suite',
+			width: 12,
+			value:
+				'The suite server connects to the game and owns the series: its options are set in the control panel, and ' +
+				'resetting it here resets it everywhere. Game commands and variables go through the server.',
+			isVisibleExpression: `$(options:mode) == 'suite'`,
+		},
+		{
+			type: 'textinput',
+			id: 'suiteHost',
+			label: 'Suite server host',
+			width: 8,
+			default: DEFAULT_HOST,
+			regex: Regex.HOSTNAME,
+			isVisibleExpression: `$(options:mode) == 'suite'`,
+		},
+		{
+			type: 'number',
+			id: 'suitePort',
+			label: 'Suite server port',
+			width: 4,
+			min: 1,
+			max: 65535,
+			default: DEFAULT_SUITE_PORT,
+			isVisibleExpression: `$(options:mode) == 'suite'`,
+		},
+		{
 			type: 'textinput',
 			id: 'host',
+			isVisibleExpression: `$(options:mode) != 'suite'`,
 			label: 'Rocket League host',
 			width: 8,
 			default: DEFAULT_HOST,
@@ -49,6 +102,7 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 		{
 			type: 'number',
 			id: 'port',
+			isVisibleExpression: `$(options:mode) != 'suite'`,
 			label: 'WebPort',
 			width: 4,
 			min: 1,
@@ -58,6 +112,7 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 		{
 			type: 'checkbox',
 			id: 'ensureStatsApi',
+			isVisibleExpression: `$(options:mode) != 'suite'`,
 			label: 'Enable PacketSendRate in TAStatsAPI.ini automatically',
 			description:
 				'Only used when Rocket League runs on this computer. If PacketSendRate is 0 or invalid it is set to 30, and the game must be restarted.',
@@ -67,6 +122,7 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 		{
 			type: 'static-text',
 			id: 'seriesInfo',
+			isVisibleExpression: `$(options:mode) != 'suite'`,
 			label: 'Esports series',
 			width: 12,
 			value:
@@ -76,6 +132,7 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 		{
 			type: 'number',
 			id: 'seriesGames',
+			isVisibleExpression: `$(options:mode) != 'suite'`,
 			label: 'Games in the series',
 			width: 4,
 			min: 1,
@@ -85,6 +142,7 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 		{
 			type: 'dropdown',
 			id: 'seriesFormat',
+			isVisibleExpression: `$(options:mode) != 'suite'`,
 			label: 'Format',
 			width: 4,
 			choices: [
@@ -96,6 +154,7 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 		{
 			type: 'checkbox',
 			id: 'seriesAutoStart',
+			isVisibleExpression: `$(options:mode) != 'suite'`,
 			label: 'Start series automatically',
 			description: 'Records without pressing Start, and starts a new series after each one ends.',
 			width: 4,
@@ -104,6 +163,7 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 		{
 			type: 'number',
 			id: 'seriesTimeouts',
+			isVisibleExpression: `$(options:mode) != 'suite'`,
 			label: 'Timeouts per team',
 			description: 'Timeouts each team can call between matches. 0 turns them off.',
 			width: 4,
@@ -114,6 +174,7 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 		{
 			type: 'number',
 			id: 'seriesTimeoutSeconds',
+			isVisibleExpression: `$(options:mode) != 'suite'`,
 			label: 'Timeout length (seconds)',
 			description: '0: lasts until End timeout is pressed or the next match starts.',
 			width: 4,
@@ -124,6 +185,7 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 		{
 			type: 'checkbox',
 			id: 'seriesPersist',
+			isVisibleExpression: `$(options:mode) != 'suite'`,
 			label: 'Keep the series when Companion restarts',
 			description: 'Saves the recorded matches, manual wins and timeouts, and brings them back on start.',
 			width: 4,
@@ -132,6 +194,7 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 		{
 			type: 'textinput',
 			id: 'teamNameBlue',
+			isVisibleExpression: `$(options:mode) != 'suite'`,
 			label: 'Blue team name',
 			description: 'Name used in the results for the team playing Blue. Empty: the name set in the game.',
 			width: 6,
@@ -140,6 +203,7 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 		{
 			type: 'textinput',
 			id: 'teamNameOrange',
+			isVisibleExpression: `$(options:mode) != 'suite'`,
 			label: 'Orange team name',
 			description: 'Name used in the results for the team playing Orange. Empty: the name set in the game.',
 			width: 6,
@@ -149,6 +213,11 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 }
 
 /** `true` when the configured host points at this computer, so the game's `.ini` file can be checked. */
+/** `true` when the module talks to the broadcast suite server instead of the game. */
+export function isSuiteMode(config: ModuleConfig): boolean {
+	return config.mode === 'suite'
+}
+
 export function isLocalHost(host: string): boolean {
 	const value = host.trim().toLowerCase()
 	return value === '' || value === 'localhost' || value === '::1' || value.startsWith('127.')
