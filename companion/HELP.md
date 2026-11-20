@@ -41,9 +41,14 @@ Set **Connect to** to **Broadcast suite server** to use the module with a broadc
 - The suite server connects to Rocket League and owns the series. Its options (games, format, timeouts) are set in the suite's control panel, and every change made here (restart, stop, timeouts, manual wins…) is the same in the panel and on the HUD, and the other way around.
 - Game events and commands go through the server (`ws://<host>:<port>/stats-api`), so every variable, action, feedback and preset of the direct mode keeps working.
 - Default port: `49300`.
-- The **Series** actions work the same in this mode and are sent to the server: start / restart / stop / remove last match, pause / resume, change wins by hand, call and end timeouts. **Set team names** only swaps the colors here (Swap); the teams are named in the suite's panel. The team names, keeping the series on restart and the series options of the connection config are not used: the server owns them.
-- Extra **Suite** actions: swap colors or teams, show stats on the HUD (one or several that alternate, of the match or the series), hide / next stat, break timer (start, pause, reset, set, add time), show / hide HUD elements and next sponsor.
-- Extra **Suite** variables (`suiteLeftName`, `suiteLeftWins`, `suiteTimer`, `suiteStatsCurrent`…) and feedbacks (connected, element visible, stat on screen, timer running). For a paused series, use **Series status** (Paused). **Left / Right** are the teams as placed in the suite's panel.
+- **Left is always blue (`TeamNum 0`) and right orange (`TeamNum 1`)**, as in production and spectator.
+- The **Series** actions work the same in this mode and are sent to the server: start / restart / stop / remove last match, pause / resume, change wins by hand, call and end timeouts. **Set team names**: **Swap** makes the teams change sides, each with its wins (as in direct mode); **Set** puts teams typed by hand on those sides; **Clear** does nothing. Keeping the series on restart and the series options of the connection config are not used: the server owns them.
+- Extra **Suite** actions:
+  - **Swap teams or colors**: _Teams_ fixes teams placed the wrong way round, also mid-series: the matches already played move to the other team too, so the score of each side stays. _Teams from now on_ is for teams that really switch colors: each keeps its wins. _Colors only_ swaps the team colors on the HUD.
+  - **Show team stats** (one or several that alternate), **show a player's stats** and **show 1 vs 1 stats** (player names as in the game, variables allowed; only on the match HUD), hide / toggle / next stat.
+  - **Set a team by hand** (name, abbreviation, logo URL) and **default team colors** (color preset of the suite).
+  - Break timer (start, pause, reset, set, add time), show / hide HUD elements and next sponsor.
+- Extra **Suite** variables (`suiteLeftName`, `suiteLeftWins`, `suiteTimer`, `suiteStatsCurrent`, `suiteStatsMode`, `suiteStatsPlayers`…) and feedbacks (connected, element visible, stat on screen, kind of stats on screen, timer running). For a paused series, use **Series status** (Paused). **Left / Right** are the teams as placed in the suite's panel.
 
 ### Esports series
 
@@ -208,6 +213,6 @@ The Stats API does not report the current camera mode, so **Director camera is a
 - **Blue / Orange +1 win** and **−1 win**: change the series wins of that team by hand, with its name and wins.
 - **Swap team names**: swaps the names set by hand for Blue and Orange, when the teams switch sides.
 
-- **Broadcast suite**: stats on the HUD (toggle, next, and one button per stat, red while on screen), break timer (start / pause, 5 minutes, +1 minute), scorebug and casters on / off. They need the Broadcast suite mode. The **Series** presets (series control, wins, pause, timeouts) also work in this mode, and **Swap team names** swaps the colors of the teams there.
+- **Broadcast suite**: swap teams (fix) and swap colors; stats on the HUD (toggle, player stats, 1 vs 1, next, and one button per stat, red while on screen); break timer (start / pause, 5 minutes, +1 minute); scorebug and casters on / off. They need the Broadcast suite mode. The **Series** presets (series control, wins, pause, timeouts) also work in this mode, and **Swap team names** makes the teams change sides there, each with its wins.
 
 Presets use layered buttons and need Companion 5.0 or later.

@@ -425,12 +425,25 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 
 	/**
 	 * Sets, swaps or clears the team names set by hand, and saves them in the connection config. In suite mode
-	 * the teams are set in the suite control panel: Swap swaps their colors there, Set and Clear do nothing.
+	 * (left = blue, right = orange): Swap makes the teams change sides, each with its wins, like here; Set puts teams
+	 * typed by hand on those sides; Clear does nothing (the teams are set in the suite control panel).
 	 */
 	setTeamNames(mode: 'set' | 'swap' | 'clear', names: Partial<Record<Side, string>> = {}): void {
 		if (isSuiteMode(this.config)) {
-			if (mode === 'swap') this.sendSuiteCommand({ type: 'match.swapSides' })
-			else this.log('warn', 'Set team names: in Broadcast suite mode the teams are set in the suite control panel')
+			if (mode === 'swap') {
+				this.sendSuiteCommand({ type: 'match.swapTeams', fixHistory: false })
+			} else if (mode === 'set') {
+				const slots: [Side, 0 | 1][] = [
+					['blue', 0],
+					['orange', 1],
+				]
+				for (const [side, slot] of slots) {
+					const name = names[side]?.trim()
+					if (name) this.sendSuiteCommand({ type: 'match.setManualTeam', slot, team: { name } })
+				}
+			} else {
+				this.log('warn', 'Clear team names: in Broadcast suite mode the teams are set in the suite control panel')
+			}
 			return
 		}
 		const current = this.customTeamNames
