@@ -19,3 +19,11 @@ Executing a `yarn` command should perform all necessary steps to develop the mod
 The module can be built once with `yarn build`. This should be enough to get the module to be loadable by companion.
 
 While developing the module, by using `yarn dev` the compiler will be run in watch mode to recompile the files on change.
+
+## Releases
+
+Changes are listed in [CHANGELOG.md](./CHANGELOG.md). To release a version:
+
+1. Open a `release/vX.Y.Z` pull request that sets `version` in `package.json` to `X.Y.Z` and moves the **Unreleased** entries of the changelog under `X.Y.Z`.
+2. Once it is merged, publish a GitHub release with the tag `vX.Y.Z` on that merge, with the changelog entries as notes. The tag must match the `package.json` version, or the packaging fails.
+3. The **Release** workflow packages the module and attaches the `.tgz` to the release.
