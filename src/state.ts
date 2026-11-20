@@ -1,4 +1,4 @@
-import type { Player, UpdateStateData } from 'rocketleague-stats-api-client'
+import type { Player, UpdateStateData } from '@juande_pl/rocketleague-stats-api-client'
 
 /** Players sorted by team (Blue first) and then by spectator shortcut. Does not mutate the input. */
 export function sortPlayers(players: readonly Player[]): Player[] {

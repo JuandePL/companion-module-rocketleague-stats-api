@@ -1,5 +1,5 @@
 import type { DropdownChoice } from '@companion-module/base'
-import { PERSPECTIVES, type ChangePOVData, type Perspective } from 'rocketleague-stats-api-client'
+import { PERSPECTIVES, type ChangePOVData, type Perspective } from '@juande_pl/rocketleague-stats-api-client'
 import type ModuleInstance from './main.js'
 import { parseFocus } from './state.js'
 

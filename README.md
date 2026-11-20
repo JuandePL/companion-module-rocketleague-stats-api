@@ -1,6 +1,6 @@
 # companion-module-rocketleague-stats-api
 
-[Bitfocus Companion](https://bitfocus.io/companion) module for the [Rocket League Stats API](https://www.rocketleague.com/developer/stats-api), made for Rocket League esports productions. It uses [rocketleague-stats-api-client](https://github.com/JuandePL/rocketleague-stats-api-client) to talk to the game.
+[Bitfocus Companion](https://bitfocus.io/companion) module for the [Rocket League Stats API](https://www.rocketleague.com/developer/stats-api), made for Rocket League esports productions. It uses [@juande_pl/rocketleague-stats-api-client](https://github.com/JuandePL/rocketleague-stats-api-client) to talk to the game.
 
 - One action per Stats API command (`ChangePOV`, `LoadReplay`, `SeekReplay`, `SetGameSpeed`, `SetHUDVisibility`, `SetMatchPaused`)
 - Variables from every `UpdateState` event: `state`, `players` (sorted by team and shortcut), `teams`, `isReplay`, `hasWinner` and more

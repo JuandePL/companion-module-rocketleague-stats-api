@@ -8,7 +8,7 @@ import {
 	type Perspective,
 	type Player,
 	type UpdateStateData,
-} from 'rocketleague-stats-api-client'
+} from '@juande_pl/rocketleague-stats-api-client'
 import { DEFAULT_HOST, DEFAULT_PORT, GetConfigFields, isLocalHost, type ModuleConfig } from './config.js'
 import { UpdateVariableDefinitions, emptyStateVariables, stateVariables, type VariablesSchema } from './variables.js'
 import { UpgradeScripts } from './upgrades.js'

@@ -1,5 +1,5 @@
 import type { JsonObject, JsonValue } from '@companion-module/base'
-import type { Player, UpdateStateData } from 'rocketleague-stats-api-client'
+import type { Player, UpdateStateData } from '@juande_pl/rocketleague-stats-api-client'
 import type ModuleInstance from './main.js'
 import { formatClock } from './state.js'
 
