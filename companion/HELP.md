@@ -32,6 +32,16 @@ When Rocket League runs on the same computer as Companion, the module can check 
 
 The module reconnects automatically, so it can be started before the game. The series is kept when the connection drops. Changing a series option starts a new series.
 
+### Broadcast suite mode
+
+Set **Connect to** to **Broadcast suite server** to use the module with a broadcast suite server (its control panel and HUD) instead of the game:
+
+- The suite server connects to Rocket League and owns the series. Its options (games, format, timeouts) are set in the suite's control panel, and every change made here (restart, stop, timeouts, manual wins…) is the same in the panel and on the HUD, and the other way around.
+- Game events and commands go through the server (`ws://<host>:<port>/stats-api`), so every variable, action, feedback and preset of the direct mode keeps working.
+- Default port: `49300`.
+- Extra **Suite** actions: add / remove / set series wins, take back the last match, pause the series (matches played meanwhile don't count), swap colors or teams, show stats on the HUD (one or several that alternate, of the match or the series), hide / next stat, break timer (start, pause, reset, set, add time), show / hide HUD elements and next sponsor.
+- Extra **Suite** variables (`suiteLeftName`, `suiteLeftWins`, `suiteTimer`, `suiteStatsCurrent`…) and feedbacks (connected, element visible, stat on screen, timer running, series paused). **Left / Right** are the teams as placed in the suite's panel.
+
 ### Esports series
 
 Every match played is recorded as part of a series, with results per team, per player and per match:
@@ -181,5 +191,7 @@ The Stats API does not report the current camera mode, so **Director camera is a
 - **Blue timeout** / **Orange timeout**: calls a timeout for that team and shows its timeouts left. Green while it can call one, orange while its timeout runs.
 - **Timeout clock / end timeout**: team on timeout and the time left (or elapsed, without a time limit). Press to end it.
 - **Start / Restart / Stop series**: green while the series runs (red for Stop while it's stopped). They need two presses: after the first one the button turns orange and shows `PRESS AGAIN` for 3 seconds.
+
+- **Broadcast suite**: series wins of each team (+1 / −1), pause series, swap colors, stats on the HUD (toggle, next, and one button per stat, red while on screen), break timer (start / pause, 5 minutes, +1 minute), scorebug and casters on / off. They need the Broadcast suite mode.
 
 Presets use layered buttons and need Companion 5.0 or later.

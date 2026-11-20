@@ -3,8 +3,9 @@ import type { SeriesStatus } from '@juande_pl/rocketleague-stats-api-client'
 import type ModuleInstance from './main.js'
 import { SERIES_CONTROL_LABEL, SIDES, SIDE_LABEL, type SeriesControlMode, type Side } from './series.js'
 import { hasPov } from './state.js'
+import { suiteFeedbackDefinitions, type SuiteFeedbacksSchema } from './suite.js'
 
-export type FeedbacksSchema = {
+export type FeedbacksSchema = SuiteFeedbacksSchema & {
 	player_pov: {
 		type: 'boolean'
 		options: {
@@ -84,6 +85,7 @@ const SIDE_NOTE = 'The team playing on that side in the current match, or in the
 
 export function UpdateFeedbacks(self: ModuleInstance): void {
 	self.setFeedbackDefinitions({
+		...suiteFeedbackDefinitions(self),
 		player_pov: {
 			name: 'Player has the POV',
 			description: 'True when the spectator camera is on this player. Players are numbered as in the players variable.',

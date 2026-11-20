@@ -12,7 +12,15 @@ import {
 	type SeriesTimeoutRefusal,
 	type UpdateStateData,
 } from '@juande_pl/rocketleague-stats-api-client'
-import { DEFAULT_HOST, DEFAULT_PORT, GetConfigFields, isLocalHost, type ModuleConfig } from './config.js'
+import { DEFAULT_HOST, DEFAULT_PORT, GetConfigFields, isLocalHost, isSuiteMode, type ModuleConfig } from './config.js'
+import {
+	DEFAULT_SUITE_PORT,
+	SUITE_FEEDBACK_IDS,
+	SuiteLink,
+	suiteVariables,
+	timerVariables,
+	type SuiteCommand,
+} from './suite.js'
 import { UpdateVariableDefinitions, emptyStateVariables, stateVariables, type VariablesSchema } from './variables.js'
 import { UpgradeScripts } from './upgrades.js'
 import { UpdateActions, type ActionsSchema } from './actions.js'
@@ -78,6 +86,9 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	series: EsportsSeries | undefined
 
 	#client: RocketLeagueStatsClient | undefined
+	/** Connection to the broadcast suite server, in suite mode. It owns the series: this module only mirrors it. */
+	suite: SuiteLink | undefined
+	#suiteTimer: NodeJS.Timeout | undefined
 	/** Forwards the events of every client to the series, so it survives reconnections. */
 	readonly #relay = new EventRelay()
 	/** JSON of the series options the series was created with, to know when the config changed them. */
@@ -216,18 +227,30 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	/** Starts a new series with the options of the connection config. Clears the stored matches. */
 	startSeries(): void {
 		this.#disarmSeriesControl()
+		if (isSuiteMode(this.config)) {
+			this.sendSuiteCommand({ type: 'series.start' })
+			return
+		}
 		this.series?.start(seriesOptionsFromConfig(this.config))
 		this.#refreshSeries()
 	}
 
 	restartSeries(): void {
 		this.#disarmSeriesControl()
+		if (isSuiteMode(this.config)) {
+			this.sendSuiteCommand({ type: 'series.restart' })
+			return
+		}
 		this.series?.restart()
 		this.#refreshSeries()
 	}
 
 	stopSeries(): void {
 		this.#disarmSeriesControl()
+		if (isSuiteMode(this.config)) {
+			this.sendSuiteCommand({ type: 'series.stop' })
+			return
+		}
 		if (!this.series) return
 		this.series.stop()
 		this.log('info', 'Series stopped')
@@ -290,6 +313,14 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 
 	/** Calls a timeout for a team, by name. Refusals are logged, never thrown. Returns `true` when it was called. */
 	callTimeout(team: string): boolean {
+		if (isSuiteMode(this.config)) {
+			const slot = this.suite?.state?.series.keys.indexOf(team) ?? -1
+			if (slot < 0) {
+				this.log('warn', `Timeout for ${team || 'the team'} refused: the team is not in the match of the suite`)
+				return false
+			}
+			return this.sendSuiteCommand({ type: 'timeout.call', slot })
+		}
 		if (!this.series) return false
 		try {
 			this.series.callTimeout(team)
@@ -306,18 +337,43 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	}
 
 	endTimeout(): void {
+		if (isSuiteMode(this.config)) {
+			this.sendSuiteCommand({ type: 'timeout.end' })
+			return
+		}
 		if (!this.series?.endTimeout()) this.log('debug', 'End timeout: no timeout is running')
 	}
 
 	#seriesKey(): string {
-		return JSON.stringify([seriesOptionsFromConfig(this.config), seriesAutoStartFromConfig(this.config)])
+		return JSON.stringify([
+			seriesOptionsFromConfig(this.config),
+			seriesAutoStartFromConfig(this.config),
+			isSuiteMode(this.config),
+		])
+	}
+
+	/** Sends a command to the suite server. Refusals are logged. Returns `false` when not connected. */
+	sendSuiteCommand(cmd: SuiteCommand): boolean {
+		if (!this.suite) {
+			this.log('warn', `${cmd.type}: only available in Broadcast suite mode (connection config)`)
+			return false
+		}
+		if (!this.suite.send(cmd)) {
+			this.log('warn', `${cmd.type}: not connected to the suite server`)
+			return false
+		}
+		return true
 	}
 
 	#createSeries(): void {
 		this.#seriesConfigKey = this.#seriesKey()
+		const suite = isSuiteMode(this.config)
 		const series = new EsportsSeries(this.#relay, {
 			...seriesOptionsFromConfig(this.config),
-			autoStart: seriesAutoStartFromConfig(this.config),
+			// In suite mode the series mirrors the server's (see #connectSuite): it never starts by itself.
+			autoStart: suite ? false : seriesAutoStartFromConfig(this.config),
+			// Same team names as the suite server, so the live results match its series.
+			identifyTeam: suite ? (team) => this.suite?.state?.sides.teamKeys[team.TeamNum] ?? '' : undefined,
 		})
 		this.series = series
 		this.#lastMatch = null
@@ -430,16 +486,21 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	// -----------------------------------------------------------------------
 
 	#connect(): void {
-		const host = this.config.host?.trim() || DEFAULT_HOST
-		const port = this.config.port || DEFAULT_PORT
-		const ensureStatsApi = this.config.ensureStatsApi !== false && isLocalHost(host)
+		const suite = isSuiteMode(this.config)
+		const suiteHost = this.config.suiteHost?.trim() || DEFAULT_HOST
+		const suitePort = this.config.suitePort || DEFAULT_SUITE_PORT
+		// In suite mode the game comes through the suite server's Stats API relay.
+		const host = suite ? suiteHost : this.config.host?.trim() || DEFAULT_HOST
+		const port = suite ? suitePort : this.config.port || DEFAULT_PORT
+		const ensureStatsApi = !suite && this.config.ensureStatsApi !== false && isLocalHost(host)
+		if (suite) this.#connectSuite(suiteHost, suitePort)
+		else this.#updateVariables(suiteVariables(undefined, false, Date.now()))
 
 		this.#restartRequired = false
 		this.updateStatus(InstanceStatus.Connecting)
 
 		const client = new RocketLeagueStatsClient({
-			host,
-			port,
+			...(suite ? { url: `ws://${host}:${port}/stats-api` } : { host, port }),
 			reconnect: { initialDelay: 1000, maxDelay: 5000 },
 			ensureStatsApi: ensureStatsApi ? { warn: (message) => this.log('warn', message) } : false,
 		})
@@ -491,7 +552,49 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		client.on('MatchDestroyed', () => this.#resetMatchState())
 	}
 
+	/** Connects to the suite server: its series replaces the local one, and its state fills the suite variables. */
+	#connectSuite(host: string, port: number): void {
+		const link = new SuiteLink(host, port, {
+			status: (connected) => {
+				this.log(
+					connected ? 'info' : 'debug',
+					connected ? `Connected to the suite server (${link.url})` : 'Disconnected from the suite server',
+				)
+				this.#refreshSuite()
+			},
+			state: () => this.#refreshSuite(),
+			series: (snapshot) => {
+				try {
+					this.series?.restore(snapshot)
+				} catch (error) {
+					this.log(
+						'warn',
+						`Could not read the series of the suite: ${error instanceof Error ? error.message : String(error)}`,
+					)
+				}
+				this.#refreshSeries()
+			},
+			error: (message) => this.log('warn', `Suite: ${message}`),
+		})
+		this.suite = link
+		this.#suiteTimer = setInterval(() => {
+			if (this.suite?.state?.config.timer.running)
+				this.#updateVariables(timerVariables(this.suite.state, this.suite.now()))
+		}, 250)
+	}
+
+	#refreshSuite(): void {
+		const link = this.suite
+		if (!link) return
+		this.#updateVariables(suiteVariables(link.state, link.connected, link.now()))
+		this.checkFeedbacks(...SUITE_FEEDBACK_IDS)
+	}
+
 	#disconnect(): void {
+		this.suite?.close()
+		this.suite = undefined
+		clearInterval(this.#suiteTimer)
+		this.#suiteTimer = undefined
 		const client = this.#client
 		this.#client = undefined
 		if (client) {

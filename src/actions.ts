@@ -3,11 +3,12 @@ import { PERSPECTIVES, type ChangePOVData, type Perspective } from '@juande_pl/r
 import type ModuleInstance from './main.js'
 import { SIDES, SIDE_LABEL, type SeriesControlMode, type Side } from './series.js'
 import { parseFocus } from './state.js'
+import { suiteActionDefinitions, type SuiteActionsSchema } from './suite.js'
 
 type PerspectiveOption = Perspective | ''
 type SwitchMode = 'on' | 'off' | 'toggle'
 
-export type ActionsSchema = {
+export type ActionsSchema = SuiteActionsSchema & {
 	change_pov: {
 		options: {
 			focus: string
@@ -82,6 +83,7 @@ function resolveSwitch(mode: SwitchMode, current: boolean): boolean {
 
 export function UpdateActions(self: ModuleInstance): void {
 	self.setActionDefinitions({
+		...suiteActionDefinitions(self),
 		change_pov: {
 			name: 'Change POV',
 			description: 'ChangePOV: changes the spectator or replay camera. Set a focus, a perspective, or both.',

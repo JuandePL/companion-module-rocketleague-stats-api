@@ -694,6 +694,163 @@ function seriesControlPreset(mode: 'start' | 'restart' | 'stop'): LayeredPreset 
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Broadcast suite
+// ---------------------------------------------------------------------------
+
+type SuiteActionStep = { actionId: string; options: Record<string, unknown> }
+type SuiteFeedback = { feedbackId: string; options: Record<string, unknown>; color: number; textColor?: number }
+
+/** A suite button: a label (text or expression) on a dark background, an action, and a feedback that colors it. */
+function suitePreset(
+	name: string,
+	keywords: string[],
+	notes: string,
+	text: string | { isExpression: true; value: string },
+	actions: SuiteActionStep[],
+	feedback?: SuiteFeedback,
+): LayeredPreset {
+	return {
+		type: 'layered',
+		name,
+		keywords: ['suite', ...keywords],
+		notes,
+		canvas: { decoration: ButtonGraphicsDecorationType.None },
+		elements: [
+			{ type: 'box', id: 'background', name: 'Background', x: 0, y: 0, width: 100, height: 100, color: COLOR_IDLE },
+			textElement('label', 'Label', { x: 4, y: 4, width: 92, height: 92 }, text, 30, { weight: 'bold' }),
+		],
+		feedbacks: feedback
+			? [
+					{
+						feedbackId: feedback.feedbackId,
+						options: feedback.options,
+						styleOverrides: [
+							{ elementId: 'background', elementProperty: 'color', override: feedback.color },
+							...(feedback.textColor === undefined
+								? []
+								: [{ elementId: 'label', elementProperty: 'color', override: feedback.textColor }]),
+						],
+					},
+				]
+			: [],
+		steps: [{ down: actions, up: [] }],
+	} as unknown as LayeredPreset
+}
+
+function suitePresets(): Record<string, LayeredPreset> {
+	const wins = (side: 'Left' | 'Right') => expr(`concat(${v(`suite${side}Short`)}, '\\n', ${v(`suite${side}Wins`)})`)
+	const stat = (key: string, label: string) =>
+		suitePreset(
+			`Show ${label}`,
+			['stats', label.toLowerCase()],
+			`Shows ${label} alone on the HUD of the suite. Red while it is on screen.`,
+			label.toUpperCase(),
+			[{ actionId: 'suite_stats_show', options: { types: [key], scope: 'keep', rotate: 'keep', interval: 0 } }],
+			{ feedbackId: 'suite_stat_on_screen', options: { stat: key }, color: COLOR_ON_AIR },
+		)
+	return {
+		suite_left_win: suitePreset(
+			'Left team +1 win',
+			['series', 'score', 'win'],
+			'Adds a series win to the left team. Every screen of the suite updates.',
+			wins('Left'),
+			[{ actionId: 'suite_series_adjust', options: { team: 'left', delta: 1 } }],
+		),
+		suite_right_win: suitePreset(
+			'Right team +1 win',
+			['series', 'score', 'win'],
+			'Adds a series win to the right team. Every screen of the suite updates.',
+			wins('Right'),
+			[{ actionId: 'suite_series_adjust', options: { team: 'right', delta: 1 } }],
+		),
+		suite_left_unwin: suitePreset(
+			'Left team −1 win',
+			['series', 'score'],
+			'Removes a series win from the left team.',
+			expr(`concat(${v('suiteLeftShort')}, '\\n−1')`),
+			[{ actionId: 'suite_series_adjust', options: { team: 'left', delta: -1 } }],
+		),
+		suite_right_unwin: suitePreset(
+			'Right team −1 win',
+			['series', 'score'],
+			'Removes a series win from the right team.',
+			expr(`concat(${v('suiteRightShort')}, '\\n−1')`),
+			[{ actionId: 'suite_series_adjust', options: { team: 'right', delta: -1 } }],
+		),
+		suite_series_pause: suitePreset(
+			'Pause / resume series',
+			['series', 'pause', 'showmatch'],
+			'While the series is paused, matches that end are not counted. Orange while paused.',
+			expr(`${v('suiteSeriesStatus')} == 'paused' ? 'SERIES PAUSED' : 'PAUSE SERIES'`),
+			[{ actionId: 'suite_series_pause', options: { mode: 'toggle' } }],
+			{ feedbackId: 'suite_series_paused', options: {}, color: COLOR_PAUSED, textColor: 0x000000 },
+		),
+		suite_swap_sides: suitePreset(
+			'Swap colors',
+			['swap', 'sides', 'blue', 'orange'],
+			'The left team plays the other color.',
+			expr(`concat('SWAP\\n', ${v('suiteLeftShort')}, ': ', ${v('suiteLeftSide')})`),
+			[{ actionId: 'suite_swap', options: { what: 'sides' } }],
+		),
+		suite_stats_toggle: suitePreset(
+			'Stats on the HUD',
+			['stats', 'hud'],
+			'Shows or hides the stats chosen in the panel. Red while they are on screen.',
+			expr(`${v('suiteStatsVisible')} ? concat('STATS\\n', ${v('suiteStatsCurrent')}) : 'STATS'`),
+			[{ actionId: 'suite_stats', options: { mode: 'toggle' } }],
+			{ feedbackId: 'suite_visible', options: { section: 'stats' }, color: COLOR_ON_AIR },
+		),
+		suite_stats_next: suitePreset('Next stat', ['stats', 'next'], 'Shows the next of the chosen stats.', 'NEXT\nSTAT', [
+			{ actionId: 'suite_stats', options: { mode: 'next' } },
+		]),
+		suite_stat_goals: stat('goals', 'Goals'),
+		suite_stat_shots: stat('shots', 'Shots'),
+		suite_stat_saves: stat('saves', 'Saves'),
+		suite_stat_possession: stat('possession', 'Possession'),
+		suite_stat_boost: stat('boostPerMinute', 'Boost per minute'),
+		suite_stat_demos: stat('demos', 'Demos'),
+		suite_timer: suitePreset(
+			'Break timer start / pause',
+			['timer', 'break', 'clock'],
+			'Shows the break timer of the suite. Press to start or pause it. Green while it runs.',
+			expr(`concat(${v('suiteTimerLabel')}, '\\n', ${v('suiteTimer')})`),
+			[{ actionId: 'suite_timer', options: { mode: 'toggle' } }],
+			{ feedbackId: 'suite_timer_running', options: {}, color: 0x15803d },
+		),
+		suite_timer_5: suitePreset(
+			'Break timer 5 min',
+			['timer', 'break'],
+			'Sets the break timer to 5 minutes and starts it.',
+			'5 MIN\nBREAK',
+			[{ actionId: 'suite_timer_set', options: { minutes: 5, mode: 'countdown', start: true } }],
+		),
+		suite_timer_plus: suitePreset(
+			'Break timer +1 min',
+			['timer', 'break'],
+			'Adds one minute to the break timer.',
+			'+1 MIN',
+			[{ actionId: 'suite_timer_add', options: { seconds: 60 } }],
+		),
+		suite_scorebug: suitePreset(
+			'Scorebug on / off',
+			['scorebug', 'hud'],
+			'Shows or hides the scorebug of the suite HUD. Red while it is visible.',
+			'SCOREBUG',
+			[{ actionId: 'suite_visibility', options: { section: 'scorebug', mode: 'toggle' } }],
+			{ feedbackId: 'suite_visible', options: { section: 'scorebug' }, color: COLOR_ON_AIR },
+		),
+		suite_casters: suitePreset(
+			'Casters on / off',
+			['casters', 'hud'],
+			'Shows or hides the casters on the suite HUD. Red while they are visible.',
+			'CASTERS',
+			[{ actionId: 'suite_visibility', options: { section: 'casters', mode: 'toggle' } }],
+			{ feedbackId: 'suite_visible', options: { section: 'casters' }, color: COLOR_ON_AIR },
+		),
+	}
+}
+
 export function UpdatePresets(self: ModuleInstance): void {
 	const presets: CompanionPresetDefinitions<ModuleSchema> = {
 		scoreboard: scoreboardPreset(),
@@ -709,6 +866,7 @@ export function UpdatePresets(self: ModuleInstance): void {
 		series_start: seriesControlPreset('start'),
 		series_restart: seriesControlPreset('restart'),
 		series_stop: seriesControlPreset('stop'),
+		...suitePresets(),
 	}
 	const playerIds: string[] = []
 	for (let index = 0; index < PLAYER_PRESETS; index++) {
@@ -783,6 +941,47 @@ export function UpdatePresets(self: ModuleInstance): void {
 					name: 'Director',
 					type: 'simple',
 					presets: ['director_pov'],
+				},
+			],
+		},
+		{
+			id: 'suite',
+			name: 'Broadcast suite',
+			definitions: [
+				{
+					id: 'suite_series',
+					name: 'Series',
+					description: 'Needs "Connect to: Broadcast suite server" in the connection config.',
+					type: 'simple',
+					presets: [
+						'suite_left_win',
+						'suite_right_win',
+						'suite_left_unwin',
+						'suite_right_unwin',
+						'suite_series_pause',
+						'suite_swap_sides',
+					],
+				},
+				{
+					id: 'suite_stats',
+					name: 'Stats on the HUD',
+					type: 'simple',
+					presets: [
+						'suite_stats_toggle',
+						'suite_stats_next',
+						'suite_stat_goals',
+						'suite_stat_shots',
+						'suite_stat_saves',
+						'suite_stat_possession',
+						'suite_stat_boost',
+						'suite_stat_demos',
+					],
+				},
+				{
+					id: 'suite_scenes',
+					name: 'Timer and HUD',
+					type: 'simple',
+					presets: ['suite_timer', 'suite_timer_5', 'suite_timer_plus', 'suite_scorebug', 'suite_casters'],
 				},
 			],
 		},
