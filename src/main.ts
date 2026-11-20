@@ -9,10 +9,20 @@ import {
 	type CommandName,
 	type Perspective,
 	type Player,
+	type SeriesOptions,
+	type SeriesSnapshot,
 	type SeriesTimeoutRefusal,
 	type UpdateStateData,
 } from '@juande_pl/rocketleague-stats-api-client'
-import { DEFAULT_HOST, DEFAULT_PORT, GetConfigFields, isLocalHost, isSuiteMode, type ModuleConfig } from './config.js'
+import {
+	DEFAULT_HOST,
+	DEFAULT_PORT,
+	GetConfigFields,
+	connectionKey,
+	isLocalHost,
+	isSuiteMode,
+	type ModuleConfig,
+} from './config.js'
 import {
 	DEFAULT_SUITE_PORT,
 	SUITE_FEEDBACK_IDS,
@@ -32,10 +42,14 @@ import {
 	SERIES_CONTROL_LABEL,
 	SIDES,
 	TIMEOUT_REFUSAL_TEXT,
+	compactSnapshot,
+	customTeamName,
 	matchStatsVariables,
 	matchSummaryJson,
+	parseSnapshot,
 	seriesAutoStartFromConfig,
 	seriesOptionsFromConfig,
+	seriesPersistFromConfig,
 	seriesVariables,
 	sideTeamName,
 	timeoutVariables,
@@ -67,6 +81,19 @@ const SERIES_FEEDBACKS = [
 
 /** Minimum time between two updates of the tracker and series variables while a match is played. */
 const STATS_UPDATE_INTERVAL_MS = 250
+/** Wait after a change of the series before saving it, so a burst of changes is saved once. */
+const SNAPSHOT_SAVE_DELAY_MS = 1000
+
+function sameOptions(a: Required<SeriesOptions>, b: Required<SeriesOptions>): boolean {
+	return (
+		a.games === b.games && a.format === b.format && a.timeouts === b.timeouts && a.timeoutSeconds === b.timeoutSeconds
+	)
+}
+
+/** Side of a `TeamNum`, `undefined` for anything else than Blue (0) and Orange (1). */
+function sideOf(teamNum: number): Side | undefined {
+	return teamNum === 0 ? 'blue' : teamNum === 1 ? 'orange' : undefined
+}
 
 export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	config!: ModuleConfig // Setup in init()
@@ -99,6 +126,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	/** Series control (start, restart, stop) waiting for its confirmation press. */
 	#armedSeriesControl: SeriesControlMode | undefined
 	#seriesControlTimer: NodeJS.Timeout | undefined
+	#snapshotTimer: NodeJS.Timeout | undefined
 	#seriesFeedbackKey = ''
 	#lastMatch: ReturnType<typeof matchSummaryJson> = null
 	#lastAbortedMatch: ReturnType<typeof matchSummaryJson> = null
@@ -121,25 +149,40 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 
 		this.#resetMatchState()
 		this.#updateVariables({ isPaused: false, perspective: '', connected: false })
-		this.#createSeries()
+		this.#createSeries(this.#persistSeries() ? parseSnapshot(config.seriesSnapshot) : undefined)
 		this.#connect()
 	}
 
 	// When module gets deleted
 	async destroy(): Promise<void> {
 		this.#disconnect()
+		this.#saveSnapshotNow()
 		this.#disposeSeries()
 	}
 
 	async configUpdated(config: ModuleConfig): Promise<void> {
+		const previous = this.config
 		this.config = config
-		this.#disconnect()
-		if (this.#seriesKey() !== this.#seriesConfigKey) {
-			this.log('info', 'Series options changed: starting a new series')
-			this.#disposeSeries()
-			this.#createSeries()
+		// Only a new host, port or .ini setting needs a new connection: the module also saves its own config
+		// (team names, the saved series), and that must not drop the connection.
+		if (connectionKey(previous) !== connectionKey(config)) {
+			this.#disconnect()
+			this.#connect()
 		}
-		this.#connect()
+		if (this.#seriesKey() !== this.#seriesConfigKey) {
+			// `autoStart` is only read when the series is created: create it again and carry the stored series over.
+			const snapshot = this.series?.snapshot()
+			this.#disposeSeries()
+			this.#createSeries(snapshot)
+		} else {
+			this.#applySeriesOptions()
+		}
+		if (!seriesPersistFromConfig(config)) {
+			if (config.seriesSnapshot) this.#saveConfigPatch({ seriesSnapshot: '' })
+		} else {
+			this.#scheduleSnapshotSave()
+		}
+		this.#refreshSeries()
 	}
 
 	// Return config fields for web config
@@ -270,12 +313,12 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	requestSeriesControl(mode: SeriesControlMode, seconds: number): void {
 		const label = SERIES_CONTROL_LABEL[mode]
 		if (this.#armedSeriesControl === mode) {
-			this.log('info', `${label} series confirmed`)
+			this.log('info', `${label}: confirmed`)
 			this.runSeriesControl(mode)
 			return
 		}
 		this.#disarmSeriesControl()
-		this.log('info', `Press ${label} series again within ${seconds} s to confirm`)
+		this.log('info', `Press ${label} again within ${seconds} s to confirm`)
 		this.#armedSeriesControl = mode
 		this.#seriesControlTimer = setTimeout(() => this.#disarmSeriesControl(), Math.max(1, seconds) * 1000)
 		this.#updateVariables({ seriesControlArmed: mode })
@@ -285,7 +328,167 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	runSeriesControl(mode: SeriesControlMode): void {
 		if (mode === 'stop') this.stopSeries()
 		else if (mode === 'restart') this.restartSeries()
+		else if (mode === 'removeLast') this.removeLastMatch()
 		else this.startSeries()
+	}
+
+	/** Takes back the last recorded match, for example one that shouldn't count. */
+	removeLastMatch(): void {
+		this.#disarmSeriesControl()
+		if (isSuiteMode(this.config)) {
+			this.sendSuiteCommand({ type: 'series.undo' })
+			return
+		}
+		const removed = this.series?.removeLastMatch()
+		if (!removed) {
+			this.log('warn', 'Remove last match: the series has no recorded match')
+			return
+		}
+		const winner = removed.teams.find((team) => team.TeamNum === removed.winnerTeamNum)?.Name ?? 'Unknown'
+		this.log('info', `Removed the last match of the series (won by ${winner})`)
+		this.#lastMatch = matchSummaryJson(this.series?.matches.at(-1))
+		this.#refreshSeries()
+	}
+
+	/**
+	 * Pauses or resumes the series. While paused, the matches that end are not recorded and no timeout can be
+	 * called, for example for a showmatch between two matches of the series.
+	 */
+	pauseSeries(mode: 'pause' | 'resume' | 'toggle'): void {
+		if (isSuiteMode(this.config)) {
+			const type = { pause: 'series.pause', resume: 'series.resume', toggle: 'series.togglePause' }[mode]
+			this.sendSuiteCommand({ type })
+			return
+		}
+		const series = this.series
+		if (!series) return
+		const pause = mode === 'toggle' ? !series.paused : mode === 'pause'
+		if (pause ? series.pause() : series.resume()) {
+			this.log('info', pause ? 'Series paused: matches are not recorded' : 'Series resumed')
+		} else {
+			this.log('warn', pause ? 'Pause series: the series is not running' : 'Resume series: the series is not paused')
+		}
+		this.#refreshSeries()
+	}
+
+	/** Adds (or removes, with a negative `delta`) series wins to a team by hand. */
+	adjustWins(team: string, delta: number): void {
+		if (isSuiteMode(this.config)) {
+			const slot = this.#suiteSlot(team, 'Series wins')
+			if (slot !== undefined) this.sendSuiteCommand({ type: 'series.adjust', slot, delta: Math.round(delta) })
+			return
+		}
+		this.#changeWins(team, (series) => series.adjustWins(team, Math.round(delta)))
+	}
+
+	/** Sets the series wins of a team by hand. */
+	setWins(team: string, wins: number): void {
+		const value = Math.max(0, Math.round(wins))
+		if (isSuiteMode(this.config)) {
+			const slot = this.#suiteSlot(team, 'Series wins')
+			if (slot !== undefined) this.sendSuiteCommand({ type: 'series.setWins', slot, wins: value })
+			return
+		}
+		this.#changeWins(team, (series) => series.setWins(team, value))
+	}
+
+	/** Slot (left / right team) of the suite match where `team` plays, by its series name. Logs when it isn't there. */
+	#suiteSlot(team: string, what: string): number | undefined {
+		const slot = this.suite?.state?.series.keys.indexOf(team) ?? -1
+		if (slot < 0) {
+			this.log('warn', `${what}: ${team || 'the team'} is not in the match of the suite`)
+			return undefined
+		}
+		return slot
+	}
+
+	#changeWins(team: string, change: (series: EsportsSeries) => number): void {
+		const series = this.series
+		if (!series) return
+		if (!['running', 'paused', 'finished'].includes(series.status)) {
+			this.log('warn', `Series wins: the series is ${series.status}, start it first`)
+			return
+		}
+		try {
+			this.log('info', `${team} has ${change(series)} series win(s)`)
+		} catch (error) {
+			this.log('warn', `Series wins: ${error instanceof Error ? error.message : String(error)}`)
+		}
+		this.#refreshSeries()
+	}
+
+	/** Team names set by hand for each side (empty: the game's). In suite mode the server names the teams. */
+	get customTeamNames(): Record<Side, string> {
+		if (isSuiteMode(this.config)) return { blue: '', orange: '' }
+		return { blue: customTeamName(this.config, 'blue'), orange: customTeamName(this.config, 'orange') }
+	}
+
+	/**
+	 * Sets, swaps or clears the team names set by hand, and saves them in the connection config. In suite mode
+	 * the teams are set in the suite control panel: Swap swaps their colors there, Set and Clear do nothing.
+	 */
+	setTeamNames(mode: 'set' | 'swap' | 'clear', names: Partial<Record<Side, string>> = {}): void {
+		if (isSuiteMode(this.config)) {
+			if (mode === 'swap') this.sendSuiteCommand({ type: 'match.swapSides' })
+			else this.log('warn', 'Set team names: in Broadcast suite mode the teams are set in the suite control panel')
+			return
+		}
+		const current = this.customTeamNames
+		const next =
+			mode === 'swap'
+				? { blue: current.orange, orange: current.blue }
+				: mode === 'clear'
+					? { blue: '', orange: '' }
+					: { blue: names.blue?.trim() ?? current.blue, orange: names.orange?.trim() ?? current.orange }
+		this.#saveConfigPatch({ teamNameBlue: next.blue, teamNameOrange: next.orange })
+		const show = (name: string) => name || '(game name)'
+		this.log('info', `Team names: Blue ${show(next.blue)}, Orange ${show(next.orange)}`)
+		this.#refreshSeries()
+	}
+
+	/** Changes some fields of the config and saves it, without reconnecting. */
+	#saveConfigPatch(patch: Partial<ModuleConfig>): void {
+		this.config = { ...this.config, ...patch }
+		this.saveConfig(this.config)
+	}
+
+	/** Applies the series options of the config to the series, keeping its matches. */
+	#applySeriesOptions(): void {
+		const series = this.series
+		// In suite mode the options are set in the suite control panel: the series mirrors the server's.
+		if (!series || isSuiteMode(this.config)) return
+		const next = seriesOptionsFromConfig(this.config)
+		if (sameOptions(series.options, next)) return
+		try {
+			series.setOptions(next)
+			const format = next.format === 'best-of' ? 'best of' : 'play all'
+			this.log('info', `Series options changed (${format} ${next.games}): the recorded matches are kept`)
+		} catch (error) {
+			this.log('warn', `Series options not applied: ${error instanceof Error ? error.message : String(error)}`)
+		}
+	}
+
+	/** Saves the series in the config a moment after it changes (see {@link SNAPSHOT_SAVE_DELAY_MS}). */
+	/** `true` when the series is saved in the config. Not in suite mode: the server keeps the series. */
+	#persistSeries(): boolean {
+		return seriesPersistFromConfig(this.config) && !isSuiteMode(this.config)
+	}
+
+	#scheduleSnapshotSave(): void {
+		if (!this.#persistSeries() || this.#snapshotTimer) return
+		this.#snapshotTimer = setTimeout(() => {
+			this.#snapshotTimer = undefined
+			this.#saveSnapshotNow()
+		}, SNAPSHOT_SAVE_DELAY_MS)
+	}
+
+	#saveSnapshotNow(): void {
+		if (this.#snapshotTimer) clearTimeout(this.#snapshotTimer)
+		this.#snapshotTimer = undefined
+		const series = this.series
+		if (!series || !this.#persistSeries()) return
+		const json = JSON.stringify(compactSnapshot(series.snapshot()))
+		if (json !== this.config.seriesSnapshot) this.#saveConfigPatch({ seriesSnapshot: json })
 	}
 
 	#disarmSeriesControl(): void {
@@ -299,7 +502,8 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 
 	/** Name of the team playing on `side` in the current match, or in the last finished match of the series. */
 	sideTeamName(side: Side): string {
-		return this.series ? sideTeamName(this.series, side) : ''
+		const custom = this.customTeamNames[side]
+		return this.series ? sideTeamName(this.series, side, custom) : custom
 	}
 
 	/** Why the team can't call a timeout right now, or `undefined` if it can. */
@@ -344,12 +548,10 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		if (!this.series?.endTimeout()) this.log('debug', 'End timeout: no timeout is running')
 	}
 
+	/** The series options that can only be set when the series is created. The others change with `setOptions`. */
 	#seriesKey(): string {
-		return JSON.stringify([
-			seriesOptionsFromConfig(this.config),
-			seriesAutoStartFromConfig(this.config),
-			isSuiteMode(this.config),
-		])
+		// Switching to or from suite mode also creates the series again: in suite mode it mirrors the server's.
+		return JSON.stringify([seriesAutoStartFromConfig(this.config), isSuiteMode(this.config)])
 	}
 
 	/** Sends a command to the suite server. Refusals are logged. Returns `false` when not connected. */
@@ -365,21 +567,28 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		return true
 	}
 
-	#createSeries(): void {
+	/** Creates the series, and brings back `snapshot` (a saved series) when given. */
+	#createSeries(snapshot?: SeriesSnapshot): void {
 		this.#seriesConfigKey = this.#seriesKey()
 		const suite = isSuiteMode(this.config)
 		const series = new EsportsSeries(this.#relay, {
 			...seriesOptionsFromConfig(this.config),
 			// In suite mode the series mirrors the server's (see #connectSuite): it never starts by itself.
 			autoStart: suite ? false : seriesAutoStartFromConfig(this.config),
-			// Same team names as the suite server, so the live results match its series.
-			identifyTeam: suite ? (team) => this.suite?.state?.sides.teamKeys[team.TeamNum] ?? '' : undefined,
+			// Suite mode: same team names as the suite server, so the live results match its series.
+			// Otherwise the names set by hand, read on every result so a change applies right away.
+			identifyTeam: (team) => {
+				if (suite) return this.suite?.state?.sides.teamKeys[team.TeamNum] ?? ''
+				const side = sideOf(team.TeamNum)
+				return side ? customTeamName(this.config, side) : ''
+			},
 		})
 		this.series = series
 		this.#lastMatch = null
 		this.#lastAbortedMatch = null
 
 		this.#seriesUnsubscribers = [
+			series.onUpdate(() => this.#scheduleSnapshotSave()),
 			series.tracker.onMatchStart(() => this.#refreshSeries()),
 			series.onSeriesStart((options) => {
 				const format = options.format === 'best-of' ? 'best of' : 'play all'
@@ -412,11 +621,30 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 				this.#refreshSeries()
 			}),
 		]
+
+		if (snapshot) {
+			try {
+				series.restore(snapshot)
+				// The config wins over the options saved with the series.
+				this.#applySeriesOptions()
+				this.#lastMatch = matchSummaryJson(series.matches.at(-1))
+				this.#lastAbortedMatch = matchSummaryJson(series.abortedMatches.at(-1))
+				if (series.activeTimeout) this.#startTimeoutTimer()
+				this.log('info', `Series brought back: ${series.matches.length} match(es) recorded, ${series.status}`)
+			} catch (error) {
+				this.log(
+					'warn',
+					`Could not bring back the saved series: ${error instanceof Error ? error.message : String(error)}`,
+				)
+			}
+		}
 		this.#refreshSeries()
 	}
 
 	#disposeSeries(): void {
 		this.#disarmSeriesControl()
+		if (this.#snapshotTimer) clearTimeout(this.#snapshotTimer)
+		this.#snapshotTimer = undefined
 		for (const unsubscribe of this.#seriesUnsubscribers) unsubscribe()
 		this.#seriesUnsubscribers = []
 		this.series?.dispose()
@@ -441,8 +669,10 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		if (!series) return
 		this.#updateVariables({
 			...matchStatsVariables(series),
-			...seriesVariables(series),
+			...seriesVariables(series, this.customTeamNames),
 			...timeoutVariables(series),
+			teamNameBlue: customTeamName(this.config, 'blue'),
+			teamNameOrange: customTeamName(this.config, 'orange'),
 			lastMatch: this.#lastMatch,
 			lastAbortedMatch: this.#lastAbortedMatch,
 		})
@@ -472,7 +702,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 			series.status,
 			series.activeTimeout?.team,
 			SIDES.map((side) => {
-				const team = sideTeamName(series, side)
+				const team = this.sideTeamName(side)
 				return [team, series.timeoutRefusal(team), series.timeoutsLeft(team)]
 			}),
 		])

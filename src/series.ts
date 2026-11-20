@@ -1,14 +1,13 @@
 import type { JsonValue } from '@companion-module/base'
 import {
-	teamName,
 	type AbortedMatchSummary,
 	type AnyEventListener,
 	type EsportsSeries,
-	type GameTeam,
 	type MatchSummary,
 	type SeriesFormat,
 	type SeriesOptions,
 	type SeriesResult,
+	type SeriesSnapshot,
 	type SeriesTeamResult,
 	type SeriesTimeout,
 	type StatsApiEvent,
@@ -38,12 +37,17 @@ export class EventRelay implements StatsEventSource {
 	}
 }
 
-/** Controls of the series: start a new one, start it again, or stop recording. */
-export type SeriesControlMode = 'start' | 'restart' | 'stop'
+/**
+ * Controls of the series that clear or change what it stores, so they can ask for a second press:
+ * start a new one, start it again, stop recording, or take back the last recorded match.
+ */
+export type SeriesControlMode = 'start' | 'restart' | 'stop' | 'removeLast'
+export const SERIES_CONTROL_MODES: readonly SeriesControlMode[] = ['start', 'restart', 'stop', 'removeLast']
 export const SERIES_CONTROL_LABEL: Record<SeriesControlMode, string> = {
-	start: 'Start',
-	restart: 'Restart',
-	stop: 'Stop',
+	start: 'Start series',
+	restart: 'Restart series',
+	stop: 'Stop series',
+	removeLast: 'Remove last match',
 }
 
 export const DEFAULT_SERIES_GAMES = 5
@@ -65,6 +69,38 @@ export function seriesOptionsFromConfig(config: ModuleConfig): Required<SeriesOp
 
 export function seriesAutoStartFromConfig(config: ModuleConfig): boolean {
 	return config.seriesAutoStart !== false
+}
+
+export function seriesPersistFromConfig(config: ModuleConfig): boolean {
+	return config.seriesPersist !== false
+}
+
+/** Team name set by hand for a side (connection config or Set team names action), or `''` to use the game's. */
+export function customTeamName(config: ModuleConfig, side: Side): string {
+	const value = side === 'blue' ? config.teamNameBlue : config.teamNameOrange
+	return typeof value === 'string' ? value.trim() : ''
+}
+
+/**
+ * Snapshot of a series to save in the connection config. The timeline of each match (every event of it) is
+ * left out: it isn't needed for the results and would make the saved config huge.
+ */
+export function compactSnapshot(snapshot: SeriesSnapshot): SeriesSnapshot {
+	return {
+		...snapshot,
+		matches: snapshot.matches.map((match) => ({ ...match, timeline: [] })),
+		abortedMatches: snapshot.abortedMatches.map((match) => ({ ...match, timeline: [] })),
+	}
+}
+
+/** Reads a snapshot saved with {@link compactSnapshot}, or `undefined` when there is none or it is not JSON. */
+export function parseSnapshot(value: unknown): SeriesSnapshot | undefined {
+	if (typeof value !== 'string' || value === '') return undefined
+	try {
+		return JSON.parse(value) as SeriesSnapshot
+	} catch {
+		return undefined
+	}
 }
 
 /** Converts a value to plain JSON (dates become ISO strings, `undefined` fields are dropped). */
@@ -90,13 +126,15 @@ export const SIDE_TEAM_NUM: Record<Side, TeamNum> = { blue: 0, orange: 1 }
 export const SIDE_LABEL: Record<Side, string> = { blue: 'Blue', orange: 'Orange' }
 
 /**
- * Name of the team playing on `side`: from the current match, or from the last finished match of the
- * series when there is no match yet.
+ * Name of the team playing on `side`, as used in the results: the name set by hand for that side, else the
+ * team of the current match, else the one of the last finished match of the series.
  */
-export function sideTeamName(series: EsportsSeries, side: Side): string {
-	const teams: readonly GameTeam[] = series.tracker.getTeams()
-	if (teams.length > 0) return teamName(teams, SIDE_TEAM_NUM[side])
-	return series.teamOf(SIDE_TEAM_NUM[side])
+export function sideTeamName(series: EsportsSeries, side: Side, custom = ''): string {
+	if (custom) return custom
+	const teamNum = SIDE_TEAM_NUM[side]
+	// `teamNameOf` applies `identifyTeam`, so it gives the same names as the results.
+	if (series.tracker.getTeams().length > 0) return series.tracker.teamNameOf(teamNum)
+	return series.teamOf(teamNum)
 }
 
 /** Seconds left in a timeout with a time limit, `undefined` without one. */
@@ -170,13 +208,20 @@ export function matchStatsVariables(series: EsportsSeries): {
 
 type SideSeriesVariables = {
 	[
-		K in `series${Capitalize<Side>}${'Name' | 'Wins' | 'WinPercent' | 'ShootingPercent' | 'BoostPerMinute' | 'TimeoutsUsed' | 'TimeoutsLeft'}`
+		K in `series${Capitalize<Side>}${'Name' | 'Wins' | 'ManualWins' | 'WinPercent' | 'ShootingPercent' | 'BoostPerMinute' | 'TimeoutsUsed' | 'TimeoutsLeft'}`
 	]: K extends `${string}Name` ? string : number
 }
 
-/** Results of the series, live (the match being played included, without its win). */
-export function seriesVariables(series: EsportsSeries): {
+/**
+ * Results of the series, live (the match being played included, without its win). `customNames` are the
+ * team names set by hand for each side, if any.
+ */
+export function seriesVariables(
+	series: EsportsSeries,
+	customNames: Record<Side, string> = { blue: '', orange: '' },
+): {
 	seriesStatus: string
+	seriesPaused: boolean
 	seriesGames: number
 	seriesFormat: string
 	seriesMatchesPlayed: number
@@ -190,11 +235,13 @@ export function seriesVariables(series: EsportsSeries): {
 } & SideSeriesVariables {
 	const result: SeriesResult = series.getLiveResult()
 	const side = (which: Side) => {
-		const name = sideTeamName(series, which)
+		const name = sideTeamName(series, which, customNames[which])
 		const team: SeriesTeamResult | undefined = result.teams.find((entry) => entry.name === name)
 		return {
 			name,
-			wins: team?.wins ?? 0,
+			// Manual wins of a team that didn't play yet are not in `teams`.
+			wins: team?.wins ?? result.manualWins[name] ?? 0,
+			manualWins: result.manualWins[name] ?? 0,
 			winPercent: round1(team?.winPercent ?? 0),
 			shootingPercent: round1(team?.shootingPercent ?? 0),
 			boostPerMinute: round1(team?.boostPerMinute ?? 0),
@@ -207,6 +254,7 @@ export function seriesVariables(series: EsportsSeries): {
 	const orange = side('orange')
 	return {
 		seriesStatus: result.status,
+		seriesPaused: result.status === 'paused',
 		seriesGames: result.options.games,
 		seriesFormat: result.options.format,
 		seriesMatchesPlayed: result.matches.length,
@@ -221,6 +269,8 @@ export function seriesVariables(series: EsportsSeries): {
 		seriesOrangeName: orange.name,
 		seriesBlueWins: blue.wins,
 		seriesOrangeWins: orange.wins,
+		seriesBlueManualWins: blue.manualWins,
+		seriesOrangeManualWins: orange.manualWins,
 		seriesBlueWinPercent: blue.winPercent,
 		seriesOrangeWinPercent: orange.winPercent,
 		seriesBlueShootingPercent: blue.shootingPercent,
@@ -237,7 +287,7 @@ export function seriesVariables(series: EsportsSeries): {
 /** Readable text for why a timeout was refused. */
 export const TIMEOUT_REFUSAL_TEXT: Record<string, string> = {
 	disabled: 'timeouts are off (set "Timeouts per team" in the connection config)',
-	'not-running': 'the series is not running',
+	'not-running': 'the series is not running (or is paused)',
 	'no-match-played': 'no match of the series has finished yet',
 	'match-in-progress': 'a match is being played',
 	'unknown-team': "the team didn't play in this series",

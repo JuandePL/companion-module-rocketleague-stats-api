@@ -15,6 +15,24 @@ export type ModuleConfig = {
 	seriesAutoStart: boolean
 	seriesTimeouts: number
 	seriesTimeoutSeconds: number
+	seriesPersist: boolean
+	/** Team names set by hand for each side. Empty: the names set in the game. */
+	teamNameBlue: string
+	teamNameOrange: string
+	/** Saved series (`SeriesSnapshot` JSON without match timelines). Not shown in the config: written by the module. */
+	seriesSnapshot?: string
+}
+
+/** JSON of the fields that need a new connection to the game when they change. */
+export function connectionKey(config: ModuleConfig | undefined): string {
+	return JSON.stringify([
+		config?.mode,
+		config?.suiteHost,
+		config?.suitePort,
+		config?.host,
+		config?.port,
+		config?.ensureStatsApi,
+	])
 }
 
 export const DEFAULT_HOST = '127.0.0.1'
@@ -109,7 +127,7 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 			width: 12,
 			value:
 				'Matches are recorded as a series, with results per team, per player and per match. ' +
-				'Changing these options starts a new series.',
+				'Changing these options keeps the recorded matches: the series ends, or goes on again, with the new ones.',
 		},
 		{
 			type: 'number',
@@ -163,6 +181,33 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 			min: 0,
 			max: 3600,
 			default: 0,
+		},
+		{
+			type: 'checkbox',
+			id: 'seriesPersist',
+			isVisibleExpression: `$(options:mode) != 'suite'`,
+			label: 'Keep the series when Companion restarts',
+			description: 'Saves the recorded matches, manual wins and timeouts, and brings them back on start.',
+			width: 4,
+			default: true,
+		},
+		{
+			type: 'textinput',
+			id: 'teamNameBlue',
+			isVisibleExpression: `$(options:mode) != 'suite'`,
+			label: 'Blue team name',
+			description: 'Name used in the results for the team playing Blue. Empty: the name set in the game.',
+			width: 6,
+			default: '',
+		},
+		{
+			type: 'textinput',
+			id: 'teamNameOrange',
+			isVisibleExpression: `$(options:mode) != 'suite'`,
+			label: 'Orange team name',
+			description: 'Name used in the results for the team playing Orange. Empty: the name set in the game.',
+			width: 6,
+			default: '',
 		},
 	]
 }

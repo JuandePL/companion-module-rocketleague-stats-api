@@ -1,7 +1,14 @@
 import type { DropdownChoice } from '@companion-module/base'
 import type { SeriesStatus } from '@juande_pl/rocketleague-stats-api-client'
 import type ModuleInstance from './main.js'
-import { SERIES_CONTROL_LABEL, SIDES, SIDE_LABEL, type SeriesControlMode, type Side } from './series.js'
+import {
+	SERIES_CONTROL_LABEL,
+	SERIES_CONTROL_MODES,
+	SIDES,
+	SIDE_LABEL,
+	type SeriesControlMode,
+	type Side,
+} from './series.js'
 import { hasPov } from './state.js'
 import { suiteFeedbackDefinitions, type SuiteFeedbacksSchema } from './suite.js'
 
@@ -222,6 +229,7 @@ export function UpdateFeedbacks(self: ModuleInstance): void {
 					label: 'Status',
 					choices: [
 						{ id: 'running', label: 'Running' },
+						{ id: 'paused', label: 'Paused' },
 						{ id: 'finished', label: 'Finished' },
 						{ id: 'stopped', label: 'Stopped' },
 						{ id: 'idle', label: 'Not started' },
@@ -234,7 +242,7 @@ export function UpdateFeedbacks(self: ModuleInstance): void {
 		series_control_armed: {
 			name: 'Series control waits for confirmation',
 			description:
-				'True after the first press of a Start / Restart / Stop series that needs two presses, until it is confirmed or times out.',
+				'True after the first press of a Start / Restart / Stop series or Remove last match that needs two presses, until it is confirmed or times out.',
 			type: 'boolean',
 			defaultStyle: {
 				bgcolor: 0xd97706,
@@ -247,7 +255,7 @@ export function UpdateFeedbacks(self: ModuleInstance): void {
 					label: 'Control',
 					choices: [
 						{ id: 'any', label: 'Any' },
-						...(['start', 'restart', 'stop'] as const).map((id) => ({ id, label: SERIES_CONTROL_LABEL[id] })),
+						...SERIES_CONTROL_MODES.map((id) => ({ id, label: SERIES_CONTROL_LABEL[id] })),
 					],
 					default: 'any',
 				},

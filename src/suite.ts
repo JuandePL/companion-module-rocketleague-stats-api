@@ -342,14 +342,9 @@ export function suiteVariables(state: SuiteState | undefined, connected: boolean
 // Actions
 // ---------------------------------------------------------------------------
 
-type SlotOption = 'left' | 'right' | 'blue' | 'orange'
 type Toggle = 'on' | 'off' | 'toggle'
 
 export type SuiteActionsSchema = {
-	suite_series_adjust: { options: { team: SlotOption; delta: number } }
-	suite_series_set_wins: { options: { team: SlotOption; wins: number } }
-	suite_series_undo: { options: Record<string, never> }
-	suite_series_pause: { options: { mode: Toggle } }
 	suite_swap: { options: { what: 'sides' | 'teams' } }
 	suite_stats_show: {
 		options: { types: StatKey[]; scope: 'keep' | 'match' | 'series'; rotate: 'keep' | 'on' | 'off'; interval: number }
@@ -362,83 +357,15 @@ export type SuiteActionsSchema = {
 	suite_sponsors_next: { options: Record<string, never> }
 }
 
-const TEAM_CHOICES: DropdownChoice<SlotOption>[] = [
-	{ id: 'left', label: 'Left team' },
-	{ id: 'right', label: 'Right team' },
-	{ id: 'blue', label: 'Team playing blue' },
-	{ id: 'orange', label: 'Team playing orange' },
-]
-
 const TOGGLE_CHOICES: DropdownChoice<Toggle>[] = [
 	{ id: 'toggle', label: 'Toggle' },
 	{ id: 'on', label: 'On' },
 	{ id: 'off', label: 'Off' },
 ]
 
-function slotOf(option: SlotOption, state: SuiteState | undefined): Slot {
-	if (option === 'left') return 0
-	if (option === 'right') return 1
-	const blue = state?.sides.blue ?? 0
-	return option === 'blue' ? blue : ((1 - blue) as Slot)
-}
-
 export function suiteActionDefinitions(self: ModuleInstance): CompanionActionDefinitions<ModuleSchema['actions']> {
 	const send = (cmd: SuiteCommand) => self.sendSuiteCommand(cmd)
-	const state = () => self.suite?.state
 	const definitions: CompanionActionDefinitions<SuiteActionsSchema> = {
-		suite_series_adjust: {
-			name: 'Suite: add or remove a series win',
-			description: 'Changes the series score by hand. Every screen of the suite updates at once.',
-			options: [
-				{ id: 'team', type: 'dropdown', label: 'Team', choices: TEAM_CHOICES, default: 'left' },
-				{
-					id: 'delta',
-					type: 'number',
-					label: 'Wins to add (negative to remove)',
-					default: 1,
-					min: -10,
-					max: 10,
-					step: 1,
-				},
-			],
-			callback: (action) => {
-				send({
-					type: 'series.adjust',
-					slot: slotOf(action.options.team, state()),
-					delta: Math.round(Number(action.options.delta)),
-				})
-			},
-		},
-		suite_series_set_wins: {
-			name: 'Suite: set the series wins of a team',
-			options: [
-				{ id: 'team', type: 'dropdown', label: 'Team', choices: TEAM_CHOICES, default: 'left' },
-				{ id: 'wins', type: 'number', label: 'Wins', default: 0, min: 0, max: 99, step: 1 },
-			],
-			callback: (action) => {
-				send({
-					type: 'series.setWins',
-					slot: slotOf(action.options.team, state()),
-					wins: Math.round(Number(action.options.wins)),
-				})
-			},
-		},
-		suite_series_undo: {
-			name: 'Suite: take back the last match of the series',
-			options: [],
-			callback: () => {
-				send({ type: 'series.undo' })
-			},
-		},
-		suite_series_pause: {
-			name: 'Suite: pause / resume the series',
-			description: 'While the series is paused, matches that end are not counted (showmatch, tests…).',
-			options: [{ id: 'mode', type: 'dropdown', label: 'Mode', choices: TOGGLE_CHOICES, default: 'toggle' }],
-			callback: (action) => {
-				const mode = action.options.mode
-				send({ type: mode === 'toggle' ? 'series.togglePause' : mode === 'on' ? 'series.pause' : 'series.resume' })
-			},
-		},
 		suite_swap: {
 			name: 'Suite: swap colors or teams',
 			options: [
@@ -644,7 +571,6 @@ export type SuiteFeedbacksSchema = {
 	suite_visible: { type: 'boolean'; options: { section: 'scorebug' | 'casters' | 'timer' | 'sponsors' | 'stats' } }
 	suite_stat_on_screen: { type: 'boolean'; options: { stat: StatKey } }
 	suite_timer_running: { type: 'boolean'; options: Record<string, never> }
-	suite_series_paused: { type: 'boolean'; options: Record<string, never> }
 }
 
 export const SUITE_FEEDBACK_IDS = [
@@ -652,7 +578,6 @@ export const SUITE_FEEDBACK_IDS = [
 	'suite_visible',
 	'suite_stat_on_screen',
 	'suite_timer_running',
-	'suite_series_paused',
 ] as const
 
 export function suiteFeedbackDefinitions(
@@ -713,13 +638,6 @@ export function suiteFeedbackDefinitions(
 			defaultStyle: { bgcolor: 0x15803d, color: 0xffffff },
 			options: [],
 			callback: () => state()?.config.timer.running ?? false,
-		},
-		suite_series_paused: {
-			name: 'Suite: series paused',
-			type: 'boolean',
-			defaultStyle: { bgcolor: 0xd97706, color: 0x000000 },
-			options: [],
-			callback: () => state()?.series.status === 'paused',
 		},
 	}
 	return definitions as unknown as CompanionFeedbackDefinitions<ModuleSchema['feedbacks']>
