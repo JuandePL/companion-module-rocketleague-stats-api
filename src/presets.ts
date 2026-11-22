@@ -768,6 +768,22 @@ function suitePresets(): Record<string, LayeredPreset> {
 			'SWAP\nCOLORS',
 			[{ actionId: 'suite_swap', options: { what: 'sides' } }],
 		),
+		suite_stats_team_left: suitePreset(
+			'Left team stats',
+			['stats', 'team', 'left', 'blue'],
+			'Shows the selected stats of the left (blue) team alone on the match HUD. Red while they are on screen.',
+			expr(`concat(${v('suiteLeftShort')}, '\\nSTATS')`),
+			[{ actionId: 'suite_stats_team', options: { team: 'left', scope: 'keep' } }],
+			{ feedbackId: 'suite_stats_team', options: { team: 'left' }, color: COLOR_ON_AIR },
+		),
+		suite_stats_team_right: suitePreset(
+			'Right team stats',
+			['stats', 'team', 'right', 'orange'],
+			'Shows the selected stats of the right (orange) team alone on the match HUD. Red while they are on screen.',
+			expr(`concat(${v('suiteRightShort')}, '\\nSTATS')`),
+			[{ actionId: 'suite_stats_team', options: { team: 'right', scope: 'keep' } }],
+			{ feedbackId: 'suite_stats_team', options: { team: 'right' }, color: COLOR_ON_AIR },
+		),
 		suite_stats_player: suitePreset(
 			'Player stats',
 			['stats', 'player'],
@@ -1067,6 +1083,8 @@ export function UpdatePresets(self: ModuleInstance): void {
 					type: 'simple',
 					presets: [
 						'suite_stats_toggle',
+						'suite_stats_team_left',
+						'suite_stats_team_right',
 						'suite_stats_player',
 						'suite_stats_versus',
 						'suite_stats_next',
