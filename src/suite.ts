@@ -448,7 +448,7 @@ export function suiteActionDefinitions(self: ModuleInstance): CompanionActionDef
 			description:
 				'Left is always blue (TeamNum 0) and right orange (TeamNum 1). Swap teams fixes teams placed the wrong way ' +
 				'round: the matches already played move to the other team too, so the score of each side stays. Swap teams from ' +
-				'now on is for teams that really switch colors: each team keeps its wins. Swap colors only swaps the colors on the HUD.',
+				'now on is for teams that really switch sides: each team keeps its wins. Swap colors only swaps the colors on the HUD.',
 			options: [
 				{
 					id: 'what',
