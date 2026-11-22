@@ -418,7 +418,7 @@ function textElement(
 function seriesScorePreset(): LayeredPreset {
 	const leftColor = teamColorExpr('0', FALLBACK_TEAM_COLORS[0])
 	const rightColor = teamColorExpr('1', FALLBACK_TEAM_COLORS[1])
-	const game = `${v('seriesMatchesPlayed')} + (${v('matchStarted')} ? 1 : 0)`
+	const game = v('seriesCurrentMatch')
 
 	return {
 		type: 'layered',
@@ -452,9 +452,7 @@ function seriesScorePreset(): LayeredPreset {
 				'game',
 				'Game number',
 				{ x: 0, y: 0, width: 100, height: 26 },
-				expr(
-					`${v('seriesStatus')} == 'finished' ? 'FINAL' : concat('GAME ', min(${game}, ${v('seriesGames')}), '/', ${v('seriesGames')})`,
-				),
+				expr(`${v('seriesStatus')} == 'finished' ? 'FINAL' : concat('GAME ', ${game}, '/', ${v('seriesGames')})`),
 				75,
 				{ font: 'companion-mono' },
 			),

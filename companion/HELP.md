@@ -20,17 +20,17 @@ When Rocket League runs on the same computer as Companion, the module can check 
 
 ### Configuration
 
-| Field                                   | Description                                                                                         |
-| --------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| Host                                    | Computer running Rocket League. `127.0.0.1` for the same computer.                                  |
-| WebPort                                 | `WebPort` from `TAStatsAPI.ini`. Default `49124`.                                                   |
-| Games in the series                     | Matches in the series. Default `5`.                                                                 |
-| Format                                  | **Best of** (ends when a team wins more than half) or **Play all games**.                           |
-| Start series automatically              | Records without pressing Start, and starts a new series after each one ends. On by default.         |
-| Timeouts per team                       | Timeouts each team can call between matches. `0` (default) turns them off.                          |
-| Timeout length (seconds)                | `0` (default): the timeout lasts until **End timeout** is pressed or the next match starts.         |
-| Keep the series when Companion restarts | Saves the recorded matches, manual wins and timeouts, and brings them back on start. On by default. |
-| Blue team name / Orange team name       | Name used in the results for the team playing that side. Empty (default): the name set in the game. |
+| Field                                   | Description                                                                                                      |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Host                                    | Computer running Rocket League. `127.0.0.1` for the same computer.                                               |
+| WebPort                                 | `WebPort` from `TAStatsAPI.ini`. Default `49124`.                                                                |
+| Games in the series                     | Matches in the series. Default `5`.                                                                              |
+| Format                                  | **Best of** (ends when a team wins more than half) or **Play all games**.                                        |
+| Start series automatically              | Records without pressing Start. After a series ends, a new one starts when the next match starts. On by default. |
+| Timeouts per team                       | Timeouts each team can call between matches. `0` (default) turns them off.                                       |
+| Timeout length (seconds)                | `0` (default): the timeout lasts until **End timeout** is pressed or the next match starts.                      |
+| Keep the series when Companion restarts | Saves the recorded matches, manual wins and timeouts, and brings them back on start. On by default.              |
+| Blue team name / Orange team name       | Name used in the results for the team playing that side. Empty (default): the name set in the game.              |
 
 The module reconnects automatically, so it can be started before the game. The series is kept when the connection drops. Changing the games, format or timeouts keeps the recorded matches: the series ends, or goes on again, with the new options (for example a best of 5 turned into a best of 7).
 
@@ -122,6 +122,7 @@ Only live play counts: kickoff countdowns, goal replays and pauses are left out.
 
 | Variable                                            | Description                                                                                                                                                                    |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `matchPhase`                                        | `none`, `lobby`, `playing`, `paused`, `replay` or `ended` (an end screen is not a replay)                                                                                      |
 | `matchStarted`                                      | The match is being played (from its start, not in the lobby, until it ends or is left)                                                                                         |
 | `matchAborted`                                      | The last match was left before its end                                                                                                                                         |
 | `matchSecondsPlayed`                                | Seconds of play                                                                                                                                                                |
@@ -144,6 +145,7 @@ Series totals update live: they include the match being played, without its win 
 | `seriesPaused`                                              | The series is paused                                                                                                                                           |
 | `seriesGames` / `seriesFormat`                              | Options of the series                                                                                                                                          |
 | `seriesMatchesPlayed`                                       | Finished matches                                                                                                                                               |
+| `seriesMatchesDecided` / `seriesCurrentMatch`               | Matches decided (wins by hand counted) and the match to show (current, just over or next)                                                                      |
 | `seriesAbortedMatches`                                      | Matches left before their end (they don't count)                                                                                                               |
 | `seriesWinner` / `seriesMvp`                                | Winner (once over) and MVP                                                                                                                                     |
 | `seriesBlueName` / `seriesOrangeName`                       | Team on each side                                                                                                                                              |

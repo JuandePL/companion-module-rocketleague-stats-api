@@ -156,7 +156,7 @@ export function GetConfigFields(): SomeCompanionConfigField[] {
 			id: 'seriesAutoStart',
 			isVisibleExpression: `$(options:mode) != 'suite'`,
 			label: 'Start series automatically',
-			description: 'Records without pressing Start, and starts a new series after each one ends.',
+			description: 'Records without pressing Start. After a series ends, a new one starts when the next match starts.',
 			width: 4,
 			default: true,
 		},
