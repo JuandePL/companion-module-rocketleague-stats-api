@@ -114,6 +114,8 @@ interface SuiteSlot {
 	teamId: string | null
 	/** A team typed by hand in the suite, not in its database. */
 	manual?: { name: string; abbreviation?: string; logo?: string } | null
+	/** Abbreviation put for the team the game names there, with no team set. Not in older servers. */
+	abbreviation?: string | null
 }
 
 /** Color presets of the suite (default colors of the sides). */
@@ -345,7 +347,10 @@ export function suiteVariables(state: SuiteState | undefined, connected: boolean
 	const team = (slot: Slot) => state?.teams.find((entry) => entry.id === state.config.match.teams[slot].teamId)
 	const manual = (slot: Slot) => (team(slot) ? undefined : (state?.config.match.teams[slot].manual ?? undefined))
 	const name = (slot: Slot) => team(slot)?.name ?? manual(slot)?.name ?? state?.series.keys[slot] ?? ''
-	const short = (slot: Slot) => team(slot)?.abbreviation ?? manual(slot)?.abbreviation ?? name(slot)
+	const short = (slot: Slot) => {
+		const set = team(slot) ?? manual(slot)
+		return (set ? set.abbreviation : state?.config.match.teams[slot].abbreviation) || name(slot)
+	}
 	const mode = statsMode(state)
 	const stats = state?.config.stats
 	const current = stats && stats.types.length ? stats.types[stats.index % stats.types.length] : undefined
