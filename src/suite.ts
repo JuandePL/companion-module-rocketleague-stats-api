@@ -76,12 +76,17 @@ export interface SuiteState {
 			eventName: string
 			stage: string
 			matchLabel: string
-			teams: [{ teamId: string | null }, { teamId: string | null }]
-			swapped: boolean
+			/** Left = blue (`TeamNum 0`), right = orange (`TeamNum 1`), always. */
+			teams: [SuiteSlot, SuiteSlot]
 		}
 		scorebug: { visible: boolean }
 		stats: {
 			visible: boolean
+			/** `teams`: one stat of both teams at a time. `team`: one team. `player`: one player. `versus`: two players. */
+			mode?: StatsMode
+			/** Side of the team of the `team` mode. The server moves it when the teams change sides. */
+			team?: Slot
+			players?: [string | null, string | null]
 			types: StatKey[]
 			index: number
 			scope: 'match' | 'series'
@@ -102,6 +107,26 @@ export interface SuiteState {
 	}
 	sides: { blue: Slot; teamKeys: [string, string] }
 }
+
+export type StatsMode = 'teams' | 'team' | 'player' | 'versus'
+
+interface SuiteSlot {
+	teamId: string | null
+	/** A team typed by hand in the suite, not in its database. */
+	manual?: { name: string; abbreviation?: string; logo?: string } | null
+	/** Abbreviation put for the team the game names there, with no team set. Not in older servers. */
+	abbreviation?: string | null
+}
+
+/** Color presets of the suite (default colors of the sides). */
+export const PALETTE_PRESETS: DropdownChoice<string>[] = [
+	{ id: 'rl', label: 'Rocket League' },
+	{ id: 'esports', label: 'Esports' },
+	{ id: 'neon', label: 'Neon' },
+	{ id: 'royal', label: 'Royal' },
+	{ id: 'dark', label: 'Dark' },
+	{ id: 'mono', label: 'Black and white' },
+]
 
 export type SuiteCommand = { type: string; [key: string]: unknown }
 
@@ -260,6 +285,12 @@ export type SuiteVariablesSchema = {
 	suiteStatsCurrent: string
 	suiteStatsTypes: string
 	suiteStatsScope: string
+	/** `teams`, `team`, `player` or `versus`. */
+	suiteStatsMode: string
+	/** Team of the `team` stats. */
+	suiteStatsTeam: string
+	/** Player(s) of the `player` / `versus` stats, comma separated. */
+	suiteStatsPlayers: string
 	suiteTimer: string
 	suiteTimerSeconds: number
 	suiteTimerRunning: boolean
@@ -282,9 +313,12 @@ export const SUITE_VARIABLE_DEFINITIONS: CompanionVariableDefinitions<SuiteVaria
 	suiteSeriesStatus: { name: 'Suite: series status (idle, running, paused, finished, stopped)' },
 	suiteSeriesWinner: { name: 'Suite: series winner' },
 	suiteStatsVisible: { name: 'Suite: stats shown on the HUD' },
-	suiteStatsCurrent: { name: 'Suite: stat on screen' },
+	suiteStatsCurrent: { name: 'Suite: what the stats on screen show (the stat, the team or the players)' },
 	suiteStatsTypes: { name: 'Suite: stats selected (comma separated)' },
 	suiteStatsScope: { name: 'Suite: stats of the match or the series' },
+	suiteStatsMode: { name: 'Suite: stats mode on the match HUD (teams, team, player, versus)' },
+	suiteStatsTeam: { name: 'Suite: team of the single-team stats' },
+	suiteStatsPlayers: { name: 'Suite: player(s) of the player / 1 vs 1 stats' },
 	suiteTimer: { name: 'Suite: break timer (m:ss)' },
 	suiteTimerSeconds: { name: 'Suite: break timer in seconds' },
 	suiteTimerRunning: { name: 'Suite: break timer running' },
@@ -311,9 +345,16 @@ export function timerVariables(
 
 export function suiteVariables(state: SuiteState | undefined, connected: boolean, now: number): SuiteVariablesSchema {
 	const team = (slot: Slot) => state?.teams.find((entry) => entry.id === state.config.match.teams[slot].teamId)
-	const name = (slot: Slot) => team(slot)?.name ?? state?.series.keys[slot] ?? ''
+	const manual = (slot: Slot) => (team(slot) ? undefined : (state?.config.match.teams[slot].manual ?? undefined))
+	const name = (slot: Slot) => team(slot)?.name ?? manual(slot)?.name ?? state?.series.keys[slot] ?? ''
+	const short = (slot: Slot) => {
+		const set = team(slot) ?? manual(slot)
+		return (set ? set.abbreviation : state?.config.match.teams[slot].abbreviation) || name(slot)
+	}
+	const mode = statsMode(state)
 	const stats = state?.config.stats
 	const current = stats && stats.types.length ? stats.types[stats.index % stats.types.length] : undefined
+	const statsTeam = mode === 'team' ? name(stats?.team ?? 0) : ''
 	return {
 		suiteConnected: connected,
 		suiteEventName: state?.config.match.eventName ?? '',
@@ -321,21 +362,46 @@ export function suiteVariables(state: SuiteState | undefined, connected: boolean
 		suiteMatchLabel: state?.config.match.matchLabel ?? '',
 		suiteLeftName: name(0),
 		suiteRightName: name(1),
-		suiteLeftShort: team(0)?.abbreviation ?? name(0),
-		suiteRightShort: team(1)?.abbreviation ?? name(1),
+		suiteLeftShort: short(0),
+		suiteRightShort: short(1),
 		suiteLeftWins: state?.series.wins[0] ?? 0,
 		suiteRightWins: state?.series.wins[1] ?? 0,
-		suiteLeftSide: state?.config.match.swapped ? 'orange' : 'blue',
+		// In production and spectator the left team is always blue.
+		suiteLeftSide: 'blue',
 		suiteSeriesStatus: state?.series.status ?? '',
 		suiteSeriesWinner: state && state.series.winner !== null ? name(state.series.winner) : '',
 		suiteStatsVisible: stats?.visible ?? false,
-		suiteStatsCurrent: stats?.visible && current ? STAT_LABELS[current] : '',
+		suiteStatsCurrent: stats?.visible
+			? mode === 'teams'
+				? current
+					? STAT_LABELS[current]
+					: ''
+				: mode === 'team'
+					? statsTeam
+					: statsPlayers(state)
+			: '',
 		suiteStatsTypes: stats?.types.map((key) => STAT_LABELS[key]).join(', ') ?? '',
 		suiteStatsScope: stats?.scope ?? '',
+		suiteStatsMode: mode,
+		suiteStatsTeam: statsTeam,
+		suiteStatsPlayers: statsPlayers(state),
 		suiteTimerLabel: state?.config.timer.label ?? '',
 		suiteCasters: state?.config.casters.list.map((caster) => caster.nickname || caster.name).join(', ') ?? '',
 		...timerVariables(state, now),
 	}
+}
+
+function statsMode(state: SuiteState | undefined): StatsMode {
+	return state?.config.stats.mode ?? 'teams'
+}
+
+function statsPlayers(state: SuiteState | undefined): string {
+	const stats = state?.config.stats
+	const mode = statsMode(state)
+	// The server keeps the last players picked in the other modes: they are not on screen then.
+	if (!stats || (mode !== 'player' && mode !== 'versus')) return ''
+	const players = (stats.players ?? []).filter((name): name is string => !!name)
+	return mode === 'versus' ? players.join(' vs ') : (players[0] ?? '')
 }
 
 // ---------------------------------------------------------------------------
@@ -345,7 +411,12 @@ export function suiteVariables(state: SuiteState | undefined, connected: boolean
 type Toggle = 'on' | 'off' | 'toggle'
 
 export type SuiteActionsSchema = {
-	suite_swap: { options: { what: 'sides' | 'teams' } }
+	suite_swap: { options: { what: 'sides' | 'teams' | 'teams-from-now' } }
+	suite_stats_team: { options: { team: 'left' | 'right'; scope: 'keep' | 'match' | 'series' } }
+	suite_stats_player: { options: { player: string; scope: 'keep' | 'match' | 'series' } }
+	suite_stats_versus: { options: { player1: string; player2: string; scope: 'keep' | 'match' | 'series' } }
+	suite_manual_team: { options: { team: 'left' | 'right'; name: string; abbreviation: string; logo: string } }
+	suite_palette: { options: { preset: string } }
 	suite_stats_show: {
 		options: { types: StatKey[]; scope: 'keep' | 'match' | 'series'; rotate: 'keep' | 'on' | 'off'; interval: number }
 	}
@@ -357,6 +428,17 @@ export type SuiteActionsSchema = {
 	suite_sponsors_next: { options: Record<string, never> }
 }
 
+const SIDE_CHOICES: DropdownChoice<'left' | 'right'>[] = [
+	{ id: 'left', label: 'Left (blue)' },
+	{ id: 'right', label: 'Right (orange)' },
+]
+
+const SCOPE_CHOICES: DropdownChoice<'keep' | 'match' | 'series'>[] = [
+	{ id: 'keep', label: 'Keep current' },
+	{ id: 'match', label: 'Current match' },
+	{ id: 'series', label: 'Whole series' },
+]
+
 const TOGGLE_CHOICES: DropdownChoice<Toggle>[] = [
 	{ id: 'toggle', label: 'Toggle' },
 	{ id: 'on', label: 'On' },
@@ -367,26 +449,124 @@ export function suiteActionDefinitions(self: ModuleInstance): CompanionActionDef
 	const send = (cmd: SuiteCommand) => self.sendSuiteCommand(cmd)
 	const definitions: CompanionActionDefinitions<SuiteActionsSchema> = {
 		suite_swap: {
-			name: 'Suite: swap colors or teams',
+			name: 'Suite: swap teams or colors',
+			description:
+				'Left is always blue (TeamNum 0) and right orange (TeamNum 1). Swap teams fixes teams placed the wrong way ' +
+				'round: the matches already played move to the other team too, so the score of each side stays. Swap teams from ' +
+				'now on is for teams that really switch sides: each team keeps its wins. Swap colors only swaps the colors on the HUD.',
 			options: [
 				{
 					id: 'what',
 					type: 'dropdown',
 					label: 'Swap',
 					choices: [
-						{ id: 'sides', label: 'Colors: the left team plays the other color' },
-						{ id: 'teams', label: 'Teams: left and right change places' },
+						{ id: 'teams', label: 'Teams (they were the wrong way round: fix the played matches too)' },
+						{ id: 'teams-from-now', label: 'Teams from now on (each team keeps its wins)' },
+						{ id: 'sides', label: 'Colors only (on the HUD)' },
 					],
-					default: 'sides',
+					default: 'teams',
 				},
 			],
 			callback: (action) => {
-				send({ type: action.options.what === 'teams' ? 'match.swapTeams' : 'match.swapSides' })
+				const what = action.options.what
+				if (what === 'sides') send({ type: 'match.swapSides' })
+				else send({ type: 'match.swapTeams', fixHistory: what === 'teams' })
+			},
+		},
+		suite_stats_team: {
+			name: "Suite: show one team's stats on the HUD",
+			description:
+				'Shows the selected stats of one team, all at once, on the match HUD (only there, not on the stats scene). ' +
+				'If the teams change sides while it is shown, it keeps showing the same team.',
+			options: [
+				{ id: 'team', type: 'dropdown', label: 'Team', choices: SIDE_CHOICES, default: 'left' },
+				{ id: 'scope', type: 'dropdown', label: 'Data of', choices: SCOPE_CHOICES, default: 'keep' },
+			],
+			callback: (action) => {
+				const { team, scope } = action.options
+				send({ type: 'stats.showTeam', slot: team === 'right' ? 1 : 0, ...(scope !== 'keep' ? { scope } : {}) })
+			},
+		},
+		suite_stats_player: {
+			name: "Suite: show a player's stats on the HUD",
+			description:
+				'Shows the stats of one player on the match HUD (only there, not on the stats scene). The name is the one in the game.',
+			options: [
+				{ id: 'player', type: 'textinput', label: 'Player name (as in the game)', default: '', useVariables: true },
+				{ id: 'scope', type: 'dropdown', label: 'Data of', choices: SCOPE_CHOICES, default: 'keep' },
+			],
+			callback: (action) => {
+				const player = String(action.options.player ?? '').trim()
+				if (!player) {
+					self.log('warn', 'Show player stats: type a player name')
+					return
+				}
+				const scope = action.options.scope
+				send({ type: 'stats.showPlayer', player, ...(scope !== 'keep' ? { scope } : {}) })
+			},
+		},
+		suite_stats_versus: {
+			name: 'Suite: show 1 vs 1 stats on the HUD',
+			description: 'Compares two players on the match HUD (only there, not on the stats scene). Names as in the game.',
+			options: [
+				{ id: 'player1', type: 'textinput', label: 'Player 1 (left)', default: '', useVariables: true },
+				{ id: 'player2', type: 'textinput', label: 'Player 2 (right)', default: '', useVariables: true },
+				{ id: 'scope', type: 'dropdown', label: 'Data of', choices: SCOPE_CHOICES, default: 'keep' },
+			],
+			callback: (action) => {
+				const first = String(action.options.player1 ?? '').trim()
+				const second = String(action.options.player2 ?? '').trim()
+				if (!first || !second) {
+					self.log('warn', 'Show 1 vs 1 stats: type both player names')
+					return
+				}
+				const scope = action.options.scope
+				send({ type: 'stats.showVersus', players: [first, second], ...(scope !== 'keep' ? { scope } : {}) })
+			},
+		},
+		suite_manual_team: {
+			name: 'Suite: set a team by hand',
+			description:
+				'Puts a team that is not in the suite database on one side (empty name: clears it). The suite can save it to its database.',
+			options: [
+				{
+					id: 'team',
+					type: 'dropdown',
+					label: 'Side',
+					choices: [
+						{ id: 'left', label: 'Left (blue)' },
+						{ id: 'right', label: 'Right (orange)' },
+					],
+					default: 'left',
+				},
+				{ id: 'name', type: 'textinput', label: 'Name', default: '', useVariables: true },
+				{ id: 'abbreviation', type: 'textinput', label: 'Abbreviation (optional)', default: '', useVariables: true },
+				{ id: 'logo', type: 'textinput', label: 'Logo URL (optional)', default: '', useVariables: true },
+			],
+			callback: (action) => {
+				const read = (value: unknown) => (typeof value === 'string' ? value : '').trim()
+				const name = read(action.options.name)
+				const abbreviation = read(action.options.abbreviation)
+				const logo = read(action.options.logo)
+				send({
+					type: 'match.setManualTeam',
+					slot: action.options.team === 'right' ? 1 : 0,
+					team: name ? { name, ...(abbreviation ? { abbreviation } : {}), ...(logo ? { logo } : {}) } : null,
+				})
+			},
+		},
+		suite_palette: {
+			name: 'Suite: default team colors',
+			description: 'Color preset for teams without their own colors. Teams on the old default colors follow it.',
+			options: [{ id: 'preset', type: 'dropdown', label: 'Preset', choices: PALETTE_PRESETS, default: 'rl' }],
+			callback: (action) => {
+				send({ type: 'palette.preset', preset: action.options.preset })
 			},
 		},
 		suite_stats_show: {
-			name: 'Suite: show stats on the HUD',
-			description: 'Shows one stat, or several that alternate, on the HUD of the suite.',
+			name: "Suite: show both teams' stats on the HUD",
+			description:
+				"Shows one stat of both teams, or several that alternate, on the match HUD of the suite. These become the HUD's own stats (not linked to the stats scene).",
 			options: [
 				{
 					id: 'types',
@@ -571,6 +751,8 @@ export type SuiteFeedbacksSchema = {
 	suite_visible: { type: 'boolean'; options: { section: 'scorebug' | 'casters' | 'timer' | 'sponsors' | 'stats' } }
 	suite_stat_on_screen: { type: 'boolean'; options: { stat: StatKey } }
 	suite_timer_running: { type: 'boolean'; options: Record<string, never> }
+	suite_stats_mode: { type: 'boolean'; options: { mode: StatsMode } }
+	suite_stats_team: { type: 'boolean'; options: { team: 'left' | 'right' } }
 }
 
 export const SUITE_FEEDBACK_IDS = [
@@ -578,6 +760,8 @@ export const SUITE_FEEDBACK_IDS = [
 	'suite_visible',
 	'suite_stat_on_screen',
 	'suite_timer_running',
+	'suite_stats_mode',
+	'suite_stats_team',
 ] as const
 
 export function suiteFeedbackDefinitions(
@@ -615,6 +799,8 @@ export function suiteFeedbackDefinitions(
 		},
 		suite_stat_on_screen: {
 			name: 'Suite: this stat is on screen',
+			description:
+				"True while the HUD compares both teams on this stat. For the other kinds, use 'stats of this kind'.",
 			type: 'boolean',
 			defaultStyle: { bgcolor: 0xcc0000, color: 0xffffff },
 			options: [
@@ -628,7 +814,8 @@ export function suiteFeedbackDefinitions(
 			],
 			callback: (feedback) => {
 				const stats = state()?.config.stats
-				if (!stats?.visible || stats.types.length === 0) return false
+				// The index only means something when both teams are compared, one stat at a time.
+				if (!stats?.visible || statsMode(state()) !== 'teams' || stats.types.length === 0) return false
 				return stats.types[stats.index % stats.types.length] === feedback.options.stat
 			},
 		},
@@ -638,6 +825,39 @@ export function suiteFeedbackDefinitions(
 			defaultStyle: { bgcolor: 0x15803d, color: 0xffffff },
 			options: [],
 			callback: () => state()?.config.timer.running ?? false,
+		},
+		suite_stats_mode: {
+			name: 'Suite: stats of this kind on the HUD',
+			description: 'True while the match HUD shows stats of this kind: both teams, one team, one player, or 1 vs 1.',
+			type: 'boolean',
+			defaultStyle: { bgcolor: 0xcc0000, color: 0xffffff },
+			options: [
+				{
+					id: 'mode',
+					type: 'dropdown',
+					label: 'Kind',
+					choices: [
+						{ id: 'teams', label: 'Both teams' },
+						{ id: 'team', label: 'One team' },
+						{ id: 'player', label: 'One player' },
+						{ id: 'versus', label: '1 vs 1' },
+					],
+					default: 'player',
+				},
+			],
+			callback: (feedback) => !!state()?.config.stats.visible && statsMode(state()) === feedback.options.mode,
+		},
+		suite_stats_team: {
+			name: "Suite: this team's stats are on screen",
+			description: 'True while the match HUD shows the stats of only the team on this side.',
+			type: 'boolean',
+			defaultStyle: { bgcolor: 0xcc0000, color: 0xffffff },
+			options: [{ id: 'team', type: 'dropdown', label: 'Team', choices: SIDE_CHOICES, default: 'left' }],
+			callback: (feedback) => {
+				const stats = state()?.config.stats
+				const slot = feedback.options.team === 'right' ? 1 : 0
+				return !!stats?.visible && stats.mode === 'team' && stats.team === slot
+			},
 		},
 	}
 	return definitions as unknown as CompanionFeedbackDefinitions<ModuleSchema['feedbacks']>

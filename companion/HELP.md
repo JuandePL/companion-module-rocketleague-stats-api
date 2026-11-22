@@ -20,17 +20,17 @@ When Rocket League runs on the same computer as Companion, the module can check 
 
 ### Configuration
 
-| Field                                   | Description                                                                                         |
-| --------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| Host                                    | Computer running Rocket League. `127.0.0.1` for the same computer.                                  |
-| WebPort                                 | `WebPort` from `TAStatsAPI.ini`. Default `49124`.                                                   |
-| Games in the series                     | Matches in the series. Default `5`.                                                                 |
-| Format                                  | **Best of** (ends when a team wins more than half) or **Play all games**.                           |
-| Start series automatically              | Records without pressing Start, and starts a new series after each one ends. On by default.         |
-| Timeouts per team                       | Timeouts each team can call between matches. `0` (default) turns them off.                          |
-| Timeout length (seconds)                | `0` (default): the timeout lasts until **End timeout** is pressed or the next match starts.         |
-| Keep the series when Companion restarts | Saves the recorded matches, manual wins and timeouts, and brings them back on start. On by default. |
-| Blue team name / Orange team name       | Name used in the results for the team playing that side. Empty (default): the name set in the game. |
+| Field                                   | Description                                                                                                      |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Host                                    | Computer running Rocket League. `127.0.0.1` for the same computer.                                               |
+| WebPort                                 | `WebPort` from `TAStatsAPI.ini`. Default `49124`.                                                                |
+| Games in the series                     | Matches in the series. Default `5`.                                                                              |
+| Format                                  | **Best of** (ends when a team wins more than half) or **Play all games**.                                        |
+| Start series automatically              | Records without pressing Start. After a series ends, a new one starts when the next match starts. On by default. |
+| Timeouts per team                       | Timeouts each team can call between matches. `0` (default) turns them off.                                       |
+| Timeout length (seconds)                | `0` (default): the timeout lasts until **End timeout** is pressed or the next match starts.                      |
+| Keep the series when Companion restarts | Saves the recorded matches, manual wins and timeouts, and brings them back on start. On by default.              |
+| Blue team name / Orange team name       | Name used in the results for the team playing that side. Empty (default): the name set in the game.              |
 
 The module reconnects automatically, so it can be started before the game. The series is kept when the connection drops. Changing the games, format or timeouts keeps the recorded matches: the series ends, or goes on again, with the new options (for example a best of 5 turned into a best of 7).
 
@@ -41,9 +41,14 @@ Set **Connect to** to **Broadcast suite server** to use the module with a broadc
 - The suite server connects to Rocket League and owns the series. Its options (games, format, timeouts) are set in the suite's control panel, and every change made here (restart, stop, timeouts, manual wins…) is the same in the panel and on the HUD, and the other way around.
 - Game events and commands go through the server (`ws://<host>:<port>/stats-api`), so every variable, action, feedback and preset of the direct mode keeps working.
 - Default port: `49300`.
-- The **Series** actions work the same in this mode and are sent to the server: start / restart / stop / remove last match, pause / resume, change wins by hand, call and end timeouts. **Set team names** only swaps the colors here (Swap); the teams are named in the suite's panel. The team names, keeping the series on restart and the series options of the connection config are not used: the server owns them.
-- Extra **Suite** actions: swap colors or teams, show stats on the HUD (one or several that alternate, of the match or the series), hide / next stat, break timer (start, pause, reset, set, add time), show / hide HUD elements and next sponsor.
-- Extra **Suite** variables (`suiteLeftName`, `suiteLeftWins`, `suiteTimer`, `suiteStatsCurrent`…) and feedbacks (connected, element visible, stat on screen, timer running). For a paused series, use **Series status** (Paused). **Left / Right** are the teams as placed in the suite's panel.
+- **Left is always blue (`TeamNum 0`) and right orange (`TeamNum 1`)**, as in production and spectator.
+- The **Series** actions work the same in this mode and are sent to the server: start / restart / stop / remove last match, pause / resume, change wins by hand, call and end timeouts. **Set team names**: **Swap** makes the teams change sides, each with its wins (as in direct mode); **Set** puts teams typed by hand on those sides; **Clear** does nothing. Keeping the series on restart and the series options of the connection config are not used: the server owns them.
+- Extra **Suite** actions:
+  - **Swap teams or colors**: _Teams_ fixes teams placed the wrong way round, also mid-series: the matches already played move to the other team too, so the score of each side stays. _Teams from now on_ is for teams that really switch sides: each keeps its wins. _Colors only_ swaps the team colors on the HUD.
+  - **Show both teams' stats** (one or several that alternate), **show one team's stats** (the selected stats, all at once; it follows the team if the teams change sides), **show a player's stats** and **show 1 vs 1 stats** (player names as in the game, variables allowed; only on the match HUD), hide / toggle / next stat.
+  - **Set a team by hand** (name, abbreviation, logo URL) and **default team colors** (color preset of the suite).
+  - Break timer (start, pause, reset, set, add time), show / hide HUD elements and next sponsor.
+- Extra **Suite** variables (`suiteLeftName`, `suiteLeftWins`, `suiteTimer`, `suiteStatsCurrent`, `suiteStatsMode`, `suiteStatsTeam`, `suiteStatsPlayers`…) and feedbacks (connected, element visible, stat on screen when both teams are compared, kind of stats on screen, team on screen alone, timer running). For a paused series, use **Series status** (Paused). **Left / Right** are the teams as placed in the suite's panel.
 
 ### Esports series
 
@@ -117,6 +122,7 @@ Only live play counts: kickoff countdowns, goal replays and pauses are left out.
 
 | Variable                                            | Description                                                                                                                                                                    |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `matchPhase`                                        | `none`, `lobby`, `playing`, `paused`, `replay` or `ended` (an end screen is not a replay)                                                                                      |
 | `matchStarted`                                      | The match is being played (from its start, not in the lobby, until it ends or is left)                                                                                         |
 | `matchAborted`                                      | The last match was left before its end                                                                                                                                         |
 | `matchSecondsPlayed`                                | Seconds of play                                                                                                                                                                |
@@ -139,6 +145,7 @@ Series totals update live: they include the match being played, without its win 
 | `seriesPaused`                                              | The series is paused                                                                                                                                           |
 | `seriesGames` / `seriesFormat`                              | Options of the series                                                                                                                                          |
 | `seriesMatchesPlayed`                                       | Finished matches                                                                                                                                               |
+| `seriesMatchesDecided` / `seriesCurrentMatch`               | Matches decided (wins by hand counted) and the match to show (current, just over or next)                                                                      |
 | `seriesAbortedMatches`                                      | Matches left before their end (they don't count)                                                                                                               |
 | `seriesWinner` / `seriesMvp`                                | Winner (once over) and MVP                                                                                                                                     |
 | `seriesBlueName` / `seriesOrangeName`                       | Team on each side                                                                                                                                              |
@@ -208,6 +215,6 @@ The Stats API does not report the current camera mode, so **Director camera is a
 - **Blue / Orange +1 win** and **−1 win**: change the series wins of that team by hand, with its name and wins.
 - **Swap team names**: swaps the names set by hand for Blue and Orange, when the teams switch sides.
 
-- **Broadcast suite**: stats on the HUD (toggle, next, and one button per stat, red while on screen), break timer (start / pause, 5 minutes, +1 minute), scorebug and casters on / off. They need the Broadcast suite mode. The **Series** presets (series control, wins, pause, timeouts) also work in this mode, and **Swap team names** swaps the colors of the teams there.
+- **Broadcast suite**: swap teams (fix) and swap colors; stats on the HUD (toggle, left / right team stats, player stats, 1 vs 1, next, and one button per stat, red while on screen); break timer (start / pause, 5 minutes, +1 minute); scorebug and casters on / off. They need the Broadcast suite mode. The **Series** presets (series control, wins, pause, timeouts) also work in this mode, and **Swap team names** makes the teams change sides there, each with its wins.
 
 Presets use layered buttons and need Companion 5.0 or later.

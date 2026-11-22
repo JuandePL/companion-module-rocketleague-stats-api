@@ -2,6 +2,7 @@ import { InstanceBase, InstanceStatus, type SomeCompanionConfigField } from '@co
 import {
 	CommandValidationError,
 	EsportsSeries,
+	EventRelay,
 	NotConnectedError,
 	RocketLeagueStatsClient,
 	SeriesTimeoutError,
@@ -38,11 +39,9 @@ import { UpdateFeedbacks, type FeedbacksSchema } from './feedbacks.js'
 import { UpdatePresets } from './presets.js'
 import { sortPlayers } from './state.js'
 import {
-	EventRelay,
 	SERIES_CONTROL_LABEL,
 	SIDES,
 	TIMEOUT_REFUSAL_TEXT,
-	compactSnapshot,
 	customTeamName,
 	matchStatsVariables,
 	matchSummaryJson,
@@ -102,8 +101,9 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	state: UpdateStateData | undefined
 	/** `state.Players`, sorted by TeamNum and Shortcut (same order as the `players` variable). */
 	players: Player[] = []
-	/** Tracked from MatchPaused / MatchUnpaused and from the SetMatchPaused commands we send. */
+	/** The tracker's, which also gets the SetMatchPaused commands we send. */
 	isPaused = false
+	#connected = false
 	/** Tracked from the SetHUDVisibility commands we send (the API does not report it). */
 	hudVisible = true
 	/** Last perspective sent with ChangePOV (the API does not report it). */
@@ -238,7 +238,8 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	/** Keeps the locally tracked state in sync with the commands we send. */
 	#afterCommand<C extends CommandName>(command: C, data: CommandDataMap[C]): void {
 		if (command === 'SetMatchPaused') {
-			this.#setPaused((data as CommandDataMap['SetMatchPaused']).bPaused)
+			this.series?.tracker.setPaused((data as CommandDataMap['SetMatchPaused']).bPaused)
+			this.#refreshSeries()
 		} else if (command === 'SetHUDVisibility') {
 			this.hudVisible = (data as CommandDataMap['SetHUDVisibility']).bVisible
 		} else if (command === 'ChangePOV') {
@@ -249,7 +250,9 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		}
 	}
 
-	#setPaused(paused: boolean): void {
+	#syncPaused(): void {
+		const tracker = this.series?.tracker
+		const paused = this.#connected && !!tracker && tracker.paused && !tracker.matchEnded
 		if (this.isPaused === paused) return
 		this.isPaused = paused
 		this.#updateVariables({ isPaused: paused })
@@ -425,12 +428,25 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 
 	/**
 	 * Sets, swaps or clears the team names set by hand, and saves them in the connection config. In suite mode
-	 * the teams are set in the suite control panel: Swap swaps their colors there, Set and Clear do nothing.
+	 * (left = blue, right = orange): Swap makes the teams change sides, each with its wins, like here; Set puts teams
+	 * typed by hand on those sides; Clear does nothing (the teams are set in the suite control panel).
 	 */
 	setTeamNames(mode: 'set' | 'swap' | 'clear', names: Partial<Record<Side, string>> = {}): void {
 		if (isSuiteMode(this.config)) {
-			if (mode === 'swap') this.sendSuiteCommand({ type: 'match.swapSides' })
-			else this.log('warn', 'Set team names: in Broadcast suite mode the teams are set in the suite control panel')
+			if (mode === 'swap') {
+				this.sendSuiteCommand({ type: 'match.swapTeams', fixHistory: false })
+			} else if (mode === 'set') {
+				const slots: [Side, 0 | 1][] = [
+					['blue', 0],
+					['orange', 1],
+				]
+				for (const [side, slot] of slots) {
+					const name = names[side]?.trim()
+					if (name) this.sendSuiteCommand({ type: 'match.setManualTeam', slot, team: { name } })
+				}
+			} else {
+				this.log('warn', 'Clear team names: in Broadcast suite mode the teams are set in the suite control panel')
+			}
 			return
 		}
 		const current = this.customTeamNames
@@ -487,7 +503,8 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		this.#snapshotTimer = undefined
 		const series = this.series
 		if (!series || !this.#persistSeries()) return
-		const json = JSON.stringify(compactSnapshot(series.snapshot()))
+		// Without the timelines (every event of each match): they would make the saved config huge.
+		const json = JSON.stringify(series.snapshot({ timeline: false }))
 		if (json !== this.config.seriesSnapshot) this.#saveConfigPatch({ seriesSnapshot: json })
 	}
 
@@ -573,8 +590,9 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		const suite = isSuiteMode(this.config)
 		const series = new EsportsSeries(this.#relay, {
 			...seriesOptionsFromConfig(this.config),
-			// In suite mode the series mirrors the server's (see #connectSuite): it never starts by itself.
-			autoStart: suite ? false : seriesAutoStartFromConfig(this.config),
+			// In suite mode the series mirrors the server's (see #connectSuite): it records nothing by itself.
+			mirror: suite,
+			autoStart: seriesAutoStartFromConfig(this.config),
 			// Suite mode: same team names as the suite server, so the live results match its series.
 			// Otherwise the names set by hand, read on every result so a change applies right away.
 			identifyTeam: (team) => {
@@ -667,8 +685,9 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	#refreshSeries(): void {
 		const series = this.series
 		if (!series) return
+		this.#syncPaused()
 		this.#updateVariables({
-			...matchStatsVariables(series),
+			...matchStatsVariables(series, this.#connected),
 			...seriesVariables(series, this.customTeamNames),
 			...timeoutVariables(series),
 			teamNameBlue: customTeamName(this.config, 'blue'),
@@ -750,6 +769,8 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 
 		client.on('connect', () => {
 			this.log('info', `Connected to ${client.url}`)
+			this.#connected = true
+			this.#refreshSeries()
 			if (this.#restartRequired) {
 				this.updateStatus(InstanceStatus.UnknownWarning, 'PacketSendRate was enabled: restart Rocket League')
 			} else {
@@ -761,7 +782,10 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 			this.log('debug', `Disconnected from ${client.url}${willReconnect ? ', reconnecting' : ''}`)
 			this.updateStatus(InstanceStatus.Disconnected, 'Waiting for Rocket League')
 			this.#updateVariables({ connected: false })
+			this.#connected = false
+			this.series?.tracker.setPaused(false)
 			this.#resetMatchState()
+			this.#refreshSeries()
 		})
 		client.on('error', (error) => this.log('debug', error.message))
 		client.on('invalidMessage', (failure) => {
@@ -776,8 +800,6 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		})
 
 		client.on('UpdateState', (data) => this.#handleUpdateState(data))
-		client.on('MatchPaused', () => this.#setPaused(true))
-		client.on('MatchUnpaused', () => this.#setPaused(false))
 		client.on('MatchCreated', () => this.#resetMatchState())
 		client.on('MatchDestroyed', () => this.#resetMatchState())
 	}
@@ -796,6 +818,8 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 			series: (snapshot) => {
 				try {
 					this.series?.restore(snapshot)
+					this.#lastMatch = matchSummaryJson(this.series?.matches.at(-1))
+					this.#lastAbortedMatch = matchSummaryJson(this.series?.abortedMatches.at(-1))
 				} catch (error) {
 					this.log(
 						'warn',
@@ -829,6 +853,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		this.#client = undefined
 		if (client) {
 			client.removeAllListeners()
+			this.#connected = false
 			client.disconnect()
 		}
 	}
@@ -849,7 +874,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		this.state = undefined
 		this.players = []
 		this.#updateVariables(emptyStateVariables())
-		this.#setPaused(false)
+		this.#syncPaused()
 		this.#checkStateFeedbacks()
 	}
 

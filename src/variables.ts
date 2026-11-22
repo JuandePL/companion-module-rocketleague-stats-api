@@ -29,6 +29,8 @@ export type VariablesSchema = SuiteVariablesSchema & {
 	connected: boolean
 
 	// Live stats of the match (MatchTracker)
+	/** `tracker.phase`: none, lobby, playing, paused, replay or ended. */
+	matchPhase: string
 	/** The match is being played: from `MatchInitialized` (not in the lobby) until it ends or is left. */
 	matchStarted: boolean
 	/** The last match was left before its end (`MatchDestroyed` without `MatchEnded`). */
@@ -59,6 +61,10 @@ export type VariablesSchema = SuiteVariablesSchema & {
 	seriesGames: number
 	seriesFormat: string
 	seriesMatchesPlayed: number
+	/** Matches with a winner, wins by hand counted. */
+	seriesMatchesDecided: number
+	/** Number of the match to show. */
+	seriesCurrentMatch: number
 	seriesAbortedMatches: number
 	seriesWinner: string
 	seriesMvp: string
@@ -115,6 +121,7 @@ export function UpdateVariableDefinitions(self: ModuleInstance): void {
 		perspective: { name: 'Last perspective sent with ChangePOV' },
 		connected: { name: 'Connected to Rocket League' },
 
+		matchPhase: { name: 'What is on screen (none, lobby, playing, paused, replay, ended)' },
 		matchStarted: { name: 'The match is being played (not in the lobby)' },
 		matchAborted: { name: 'The last match was left before its end' },
 		matchSecondsPlayed: { name: 'Seconds of play in the match (no kickoffs, replays or pauses)' },
@@ -136,6 +143,8 @@ export function UpdateVariableDefinitions(self: ModuleInstance): void {
 		seriesGames: { name: 'Games in the series' },
 		seriesFormat: { name: 'Series format (best-of, play-all)' },
 		seriesMatchesPlayed: { name: 'Finished matches in the series' },
+		seriesMatchesDecided: { name: 'Matches decided in the series, wins by hand counted' },
+		seriesCurrentMatch: { name: 'Number of the match to show (current, just over or next)' },
 		seriesAbortedMatches: { name: 'Matches of the series left before their end' },
 		seriesWinner: { name: 'Series winner (empty while running or on a tie)' },
 		seriesMvp: { name: 'Series MVP' },

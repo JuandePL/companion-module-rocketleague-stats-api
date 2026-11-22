@@ -1,41 +1,17 @@
 import type { JsonValue } from '@companion-module/base'
 import {
 	type AbortedMatchSummary,
-	type AnyEventListener,
 	type EsportsSeries,
 	type MatchSummary,
 	type SeriesFormat,
 	type SeriesOptions,
 	type SeriesResult,
 	type SeriesSnapshot,
-	type SeriesTeamResult,
 	type SeriesTimeout,
-	type StatsApiEvent,
-	type StatsEventSource,
 	type TeamNum,
-	type Unsubscribe,
 } from '@juande_pl/rocketleague-stats-api-client'
 import type { ModuleConfig } from './config.js'
 import { formatClock } from './state.js'
-
-/**
- * Event source that outlives the WebSocket client: the series listens to it once, and every client
- * forwards its events to it. This way the series and its stats survive reconnections and host changes.
- */
-export class EventRelay implements StatsEventSource {
-	readonly #listeners = new Set<AnyEventListener>()
-
-	onAny(listener: AnyEventListener): Unsubscribe {
-		this.#listeners.add(listener)
-		return () => {
-			this.#listeners.delete(listener)
-		}
-	}
-
-	emit(event: StatsApiEvent): void {
-		for (const listener of [...this.#listeners]) listener(event)
-	}
-}
 
 /**
  * Controls of the series that clear or change what it stores, so they can ask for a second press:
@@ -81,19 +57,7 @@ export function customTeamName(config: ModuleConfig, side: Side): string {
 	return typeof value === 'string' ? value.trim() : ''
 }
 
-/**
- * Snapshot of a series to save in the connection config. The timeline of each match (every event of it) is
- * left out: it isn't needed for the results and would make the saved config huge.
- */
-export function compactSnapshot(snapshot: SeriesSnapshot): SeriesSnapshot {
-	return {
-		...snapshot,
-		matches: snapshot.matches.map((match) => ({ ...match, timeline: [] })),
-		abortedMatches: snapshot.abortedMatches.map((match) => ({ ...match, timeline: [] })),
-	}
-}
-
-/** Reads a snapshot saved with {@link compactSnapshot}, or `undefined` when there is none or it is not JSON. */
+/** Reads a snapshot saved in the connection config, or `undefined` when there is none or it is not JSON. */
 export function parseSnapshot(value: unknown): SeriesSnapshot | undefined {
 	if (typeof value !== 'string' || value === '') return undefined
 	try {
@@ -171,7 +135,11 @@ export function timeoutVariables(series: EsportsSeries): {
 }
 
 /** Live stats of the match being played, from the series tracker. */
-export function matchStatsVariables(series: EsportsSeries): {
+export function matchStatsVariables(
+	series: EsportsSeries,
+	connected: boolean,
+): {
+	matchPhase: string
 	matchStarted: boolean
 	matchAborted: boolean
 	matchSecondsPlayed: number
@@ -190,6 +158,7 @@ export function matchStatsVariables(series: EsportsSeries): {
 	const teams = tracker.getTeamResults()
 	const team = (side: Side) => teams.find((result) => result.TeamNum === SIDE_TEAM_NUM[side])
 	return {
+		matchPhase: connected ? tracker.phase : 'none',
 		matchStarted: tracker.matchStarted,
 		matchAborted: tracker.matchAborted,
 		matchSecondsPlayed: Math.floor(tracker.getStats().secondsPlayed),
@@ -225,6 +194,8 @@ export function seriesVariables(
 	seriesGames: number
 	seriesFormat: string
 	seriesMatchesPlayed: number
+	seriesMatchesDecided: number
+	seriesCurrentMatch: number
 	seriesAbortedMatches: number
 	seriesWinner: string
 	seriesMvp: string
@@ -236,18 +207,16 @@ export function seriesVariables(
 	const result: SeriesResult = series.getLiveResult()
 	const side = (which: Side) => {
 		const name = sideTeamName(series, which, customNames[which])
-		const team: SeriesTeamResult | undefined = result.teams.find((entry) => entry.name === name)
+		const team = series.teamResult(name, result)
 		return {
 			name,
-			// Manual wins of a team that didn't play yet are not in `teams`.
-			wins: team?.wins ?? result.manualWins[name] ?? 0,
-			manualWins: result.manualWins[name] ?? 0,
-			winPercent: round1(team?.winPercent ?? 0),
-			shootingPercent: round1(team?.shootingPercent ?? 0),
-			boostPerMinute: round1(team?.boostPerMinute ?? 0),
-			timeoutsUsed: team?.timeoutsUsed ?? 0,
-			// A team that didn't play yet still has every timeout.
-			timeoutsLeft: team?.timeoutsLeft ?? result.options.timeouts,
+			wins: team.wins,
+			manualWins: team.manualWins,
+			winPercent: round1(team.winPercent),
+			shootingPercent: round1(team.shootingPercent),
+			boostPerMinute: round1(team.boostPerMinute),
+			timeoutsUsed: team.timeoutsUsed,
+			timeoutsLeft: team.timeoutsLeft,
 		}
 	}
 	const blue = side('blue')
@@ -258,6 +227,8 @@ export function seriesVariables(
 		seriesGames: result.options.games,
 		seriesFormat: result.options.format,
 		seriesMatchesPlayed: result.matches.length,
+		seriesMatchesDecided: result.matchesDecided,
+		seriesCurrentMatch: result.currentMatch,
 		seriesAbortedMatches: result.abortedMatches.length,
 		seriesWinner: result.winner ?? '',
 		seriesMvp: result.mvp?.Name ?? '',
