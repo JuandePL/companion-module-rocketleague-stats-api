@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- **Stats setup** (Broadcast suite mode): pick the stats of the match HUD step by step from Companion buttons: the kind (team, 2 teams, player, player vs player), the team or players, then one or several stats and match / series data. **Done** sends them to the suite. With the actions **Suite: stats setup** and **Suite: stats setup choice**, `suiteSetup…` variables, feedbacks for the choices, and the **Stats setup** presets. The page jumps use Companion's **Surface: Set to page** (see the help).
+- **Stats setup** (Broadcast suite mode): pick the stats of the match HUD step by step from Companion buttons: the kind (team, 2 teams, player, player vs player), the team or players, then one or several stats and match / series data. **Done** sends them to the suite. With the actions **Suite: stats setup** and **Suite: stats setup choice**, `suiteSetup…` variables, feedbacks for the choices, and the **Stats setup** presets. The page jumps use Companion's **Surface: Set to page** (see the help) ([#7]).
 
 ## [0.3.0] - 2026-11-22
 
@@ -94,3 +94,4 @@ First release ([#1]).
 [#2]: https://github.com/JuandePL/companion-module-rocketleague-stats-api/pull/2
 [#3]: https://github.com/JuandePL/companion-module-rocketleague-stats-api/pull/3
 [#5]: https://github.com/JuandePL/companion-module-rocketleague-stats-api/pull/5
+[#7]: https://github.com/JuandePL/companion-module-rocketleague-stats-api/pull/7
