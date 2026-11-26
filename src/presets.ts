@@ -7,6 +7,7 @@ import {
 import type ModuleInstance from './main.js'
 import type { ModuleSchema } from './main.js'
 import { SERIES_CONTROL_LABEL, type Side } from './series.js'
+import { STATS_SETUP_SLOTS } from './stats-setup.js'
 
 /**
  * Prefix used in preset expressions. Companion replaces it with the connection's label when the
@@ -711,8 +712,10 @@ function suitePreset(
 	notes: string,
 	text: string | { isExpression: true; value: string },
 	actions: SuiteActionStep[],
-	feedback?: SuiteFeedback,
+	feedback?: SuiteFeedback | SuiteFeedback[],
+	fontsize = 30,
 ): LayeredPreset {
+	const feedbacks = feedback === undefined ? [] : Array.isArray(feedback) ? feedback : [feedback]
 	return {
 		type: 'layered',
 		name,
@@ -721,22 +724,18 @@ function suitePreset(
 		canvas: { decoration: ButtonGraphicsDecorationType.None },
 		elements: [
 			{ type: 'box', id: 'background', name: 'Background', x: 0, y: 0, width: 100, height: 100, color: COLOR_IDLE },
-			textElement('label', 'Label', { x: 4, y: 4, width: 92, height: 92 }, text, 30, { weight: 'bold' }),
+			textElement('label', 'Label', { x: 4, y: 4, width: 92, height: 92 }, text, fontsize, { weight: 'bold' }),
 		],
-		feedbacks: feedback
-			? [
-					{
-						feedbackId: feedback.feedbackId,
-						options: feedback.options,
-						styleOverrides: [
-							{ elementId: 'background', elementProperty: 'color', override: feedback.color },
-							...(feedback.textColor === undefined
-								? []
-								: [{ elementId: 'label', elementProperty: 'color', override: feedback.textColor }]),
-						],
-					},
-				]
-			: [],
+		feedbacks: feedbacks.map((entry) => ({
+			feedbackId: entry.feedbackId,
+			options: entry.options,
+			styleOverrides: [
+				{ elementId: 'background', elementProperty: 'color', override: entry.color },
+				...(entry.textColor === undefined
+					? []
+					: [{ elementId: 'label', elementProperty: 'color', override: entry.textColor }]),
+			],
+		})),
 		steps: [{ down: actions, up: [] }],
 	} as unknown as LayeredPreset
 }
@@ -856,6 +855,80 @@ function suitePresets(): Record<string, LayeredPreset> {
 	}
 }
 
+const COLOR_SETUP = 0x1d4ed8
+const COLOR_SELECTED = 0x15803d
+const PAGE_BACK_NOTE =
+	'To go back to the page where Setup stats was pressed, add the internal action "Surface: Set to page" with the page "Back" to this button.'
+
+/** Presets of the stats setup. Their ids, in order: start, title, choices 1-12, back, scope, done, cancel. */
+function statsSetupPresets(): Record<string, LayeredPreset> {
+	const presets: Record<string, LayeredPreset> = {
+		suite_setup_start: suitePreset(
+			'Setup stats',
+			['stats', 'setup', 'wizard', 'choose'],
+			'Opens the stats setup: kind (team, 2 teams, player, player vs player), then the team or players, then the stats. ' +
+				'Put the other Stats setup buttons on a page of their own, and add the internal action ' +
+				'"Surface: Set to page" with that page to this button. Blue while the setup is open.',
+			'SETUP\nSTATS',
+			[{ actionId: 'suite_setup', options: { mode: 'start' } }],
+			{ feedbackId: 'suite_setup_active', options: {}, color: COLOR_SETUP },
+		),
+		suite_setup_title: suitePreset(
+			'Stats setup: step',
+			['stats', 'setup'],
+			'What to choose now, and what was chosen so far.',
+			expr(`concat(${v('suiteSetupTitle')}, '\\n', ${v('suiteSetupSummary')})`),
+			[],
+			{ feedbackId: 'suite_setup_active', options: {}, color: COLOR_SETUP },
+			24,
+		),
+	}
+	for (let slot = 1; slot <= STATS_SETUP_SLOTS; slot++) {
+		presets[`suite_setup_choice_${slot}`] = suitePreset(
+			`Stats setup: choice ${slot}`,
+			['stats', 'setup', 'choice'],
+			'One of the choices of the current step of the stats setup. Green when selected, dark when empty.',
+			expr(v(`suiteSetupSlot${slot}`)),
+			[{ actionId: 'suite_setup_choice', options: { slot } }],
+			[
+				{ feedbackId: 'suite_setup_selected', options: { slot }, color: COLOR_SELECTED },
+				{ feedbackId: 'suite_setup_unused', options: { slot }, color: 0x000000, textColor: 0x404040 },
+			],
+			24,
+		)
+	}
+	presets.suite_setup_back = suitePreset(
+		'Stats setup: back',
+		['stats', 'setup', 'back'],
+		'Goes to the previous step of the stats setup (from the first one, closes it).',
+		'BACK',
+		[{ actionId: 'suite_setup', options: { mode: 'back' } }],
+	)
+	presets.suite_setup_scope = suitePreset(
+		'Stats setup: match / series',
+		['stats', 'setup', 'scope', 'series', 'match'],
+		'Stats of the current match or of the whole series.',
+		expr(`${v('suiteSetupScope')} == 'series' ? 'DATA\\nSERIES' : 'DATA\\nMATCH'`),
+		[{ actionId: 'suite_setup', options: { mode: 'scope' } }],
+	)
+	presets.suite_setup_done = suitePreset(
+		'Stats setup: done',
+		['stats', 'setup', 'done', 'apply'],
+		`Sends the chosen stats to the suite: they show on the match HUD. ${PAGE_BACK_NOTE}`,
+		'DONE',
+		[{ actionId: 'suite_setup', options: { mode: 'done' } }],
+		{ feedbackId: 'suite_setup_active', options: {}, color: COLOR_SELECTED },
+	)
+	presets.suite_setup_cancel = suitePreset(
+		'Stats setup: cancel',
+		['stats', 'setup', 'cancel'],
+		`Closes the stats setup without changing anything. ${PAGE_BACK_NOTE}`,
+		'CANCEL',
+		[{ actionId: 'suite_setup', options: { mode: 'cancel' } }],
+	)
+	return presets
+}
+
 function seriesPausePreset(): LayeredPreset {
 	return {
 		type: 'layered',
@@ -967,6 +1040,7 @@ export function UpdatePresets(self: ModuleInstance): void {
 		series_restart: seriesControlPreset('restart'),
 		series_stop: seriesControlPreset('stop'),
 		...suitePresets(),
+		...statsSetupPresets(),
 		series_remove_last: seriesControlPreset('removeLast'),
 		series_pause: seriesPausePreset(),
 		series_blue_win: seriesWinPreset('blue', 1),
@@ -1093,6 +1167,15 @@ export function UpdatePresets(self: ModuleInstance): void {
 						'suite_stat_boost',
 						'suite_stat_demos',
 					],
+				},
+				{
+					id: 'suite_setup',
+					name: 'Stats setup',
+					description:
+						'Step-by-step stats picker: put Setup stats where you want it, and the other buttons on a page of their own. ' +
+						'Add the page jumps with the internal action "Surface: Set to page" (see the help).',
+					type: 'simple',
+					presets: Object.keys(statsSetupPresets()),
 				},
 				{
 					id: 'suite_scenes',

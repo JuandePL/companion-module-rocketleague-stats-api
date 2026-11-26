@@ -32,6 +32,7 @@ import {
 	timerVariables,
 	type SuiteCommand,
 } from './suite.js'
+import { STATS_SETUP_FEEDBACK_IDS, StatsSetup } from './stats-setup.js'
 import { UpdateVariableDefinitions, emptyStateVariables, stateVariables, type VariablesSchema } from './variables.js'
 import { UpgradeScripts } from './upgrades.js'
 import { UpdateActions, type ActionsSchema } from './actions.js'
@@ -109,6 +110,10 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	/** Last perspective sent with ChangePOV (the API does not report it). */
 	perspective: Perspective | undefined
 
+	/** Step-by-step picker of the stats on the suite HUD. */
+	readonly statsSetup = new StatsSetup(this)
+	#setupFeedbackKey = ''
+
 	/** Records the matches as an esports series. Its `tracker` has the live stats of the current match. */
 	series: EsportsSeries | undefined
 
@@ -149,6 +154,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 
 		this.#resetMatchState()
 		this.#updateVariables({ isPaused: false, perspective: '', connected: false })
+		this.refreshSetup()
 		this.#createSeries(this.#persistSeries() ? parseSnapshot(config.seriesSnapshot) : undefined)
 		this.#connect()
 	}
@@ -842,6 +848,16 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		if (!link) return
 		this.#updateVariables(suiteVariables(link.state, link.connected, link.now()))
 		this.checkFeedbacks(...SUITE_FEEDBACK_IDS)
+		this.refreshSetup()
+	}
+
+	/** Updates the stats setup variables (team names and players change their labels) and its feedbacks. */
+	refreshSetup(): void {
+		this.#updateVariables(this.statsSetup.variables())
+		const key = this.statsSetup.feedbackKey()
+		if (key === this.#setupFeedbackKey) return
+		this.#setupFeedbackKey = key
+		this.checkFeedbacks(...STATS_SETUP_FEEDBACK_IDS)
 	}
 
 	#disconnect(): void {
@@ -867,6 +883,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		this.players = sortPlayers(data.Players)
 		this.#updateVariables(stateVariables(data, this.players))
 		this.#checkStateFeedbacks()
+		if (this.statsSetup.step === 'target') this.refreshSetup()
 	}
 
 	/** Clears everything that belongs to the current match. */
@@ -876,6 +893,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		this.#updateVariables(emptyStateVariables())
 		this.#syncPaused()
 		this.#checkStateFeedbacks()
+		if (this.statsSetup.step === 'target') this.refreshSetup()
 	}
 
 	/** Re-checks the state feedbacks only when one of the values they read has changed. */

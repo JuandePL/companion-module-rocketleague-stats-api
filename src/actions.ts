@@ -16,12 +16,15 @@ const TEAM_CHOICES: DropdownChoice<Side | 'name'>[] = [
 ]
 const TEAM_DESCRIPTION = 'Blue / Orange: the team on that side in the current match, or in the last finished one.'
 import { parseFocus } from './state.js'
+import { statsSetupActionDefinitions, type StatsSetupActionsSchema } from './stats-setup.js'
 import { suiteActionDefinitions, type SuiteActionsSchema } from './suite.js'
 
 type PerspectiveOption = Perspective | ''
 type SwitchMode = 'on' | 'off' | 'toggle'
 
-export type ActionsSchema = SuiteActionsSchema & {
+type SuiteAndStatsSetupActions = SuiteActionsSchema & StatsSetupActionsSchema
+
+export type ActionsSchema = SuiteAndStatsSetupActions & {
 	change_pov: {
 		options: {
 			focus: string
@@ -117,6 +120,7 @@ function resolveSwitch(mode: SwitchMode, current: boolean): boolean {
 export function UpdateActions(self: ModuleInstance): void {
 	self.setActionDefinitions({
 		...suiteActionDefinitions(self),
+		...statsSetupActionDefinitions(self),
 		change_pov: {
 			name: 'Change POV',
 			description: 'ChangePOV: changes the spectator or replay camera. Set a focus, a perspective, or both.',

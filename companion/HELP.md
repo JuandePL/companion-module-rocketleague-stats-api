@@ -50,6 +50,23 @@ Set **Connect to** to **Broadcast suite server** to use the module with a broadc
   - Break timer (start, pause, reset, set, add time), show / hide HUD elements and next sponsor.
 - Extra **Suite** variables (`suiteLeftName`, `suiteLeftWins`, `suiteTimer`, `suiteStatsCurrent`, `suiteStatsMode`, `suiteStatsTeam`, `suiteStatsPlayers`…) and feedbacks (connected, element visible, stat on screen when both teams are compared, kind of stats on screen, team on screen alone, timer running). For a paused series, use **Series status** (Paused). **Left / Right** are the teams as placed in the suite's panel.
 
+#### Stats setup
+
+A step-by-step picker for the stats on the match HUD (Broadcast suite mode), from the **Stats setup** presets:
+
+1. **Setup stats** opens it. Then choose the kind: **Team**, **2 teams**, **Player** or **Player vs player**.
+2. The team (left or right), the player, or the two players (first the left one). Players are the ones of the match being played, or of the last match between matches. Skipped for 2 teams.
+3. One or several stats (possession only for teams), and **Data: match / series**. They start with the stats on the HUD now.
+
+**Done** sends them to the suite, and they show on the match HUD. **Back** goes to the previous step, **Cancel** closes it without changing anything. The choices are the 12 **Choice** buttons: their label changes at each step, green when selected, dark when empty; the **Step** button says what to choose.
+
+Companion doesn't let a module change pages, so put the Stats setup buttons on a page of their own and add the jumps with Companion's internal action **Surface: Set to page**:
+
+- On **Setup stats** (wherever you want it): after the module's action, set the page to your stats setup page.
+- On **Done** and **Cancel**: set the page to **Back** (the page where Setup stats was pressed), or to the number of your main page.
+
+Variables: `suiteSetupActive`, `suiteSetupStep`, `suiteSetupTitle`, `suiteSetupSummary`, `suiteSetupScope` and `suiteSetupSlot1` to `suiteSetupSlot12`.
+
 ### Esports series
 
 Every match played is recorded as part of a series, with results per team, per player and per match:
@@ -215,6 +232,6 @@ The Stats API does not report the current camera mode, so **Director camera is a
 - **Blue / Orange +1 win** and **−1 win**: change the series wins of that team by hand, with its name and wins.
 - **Swap team names**: swaps the names set by hand for Blue and Orange, when the teams switch sides.
 
-- **Broadcast suite**: swap teams (fix) and swap colors; stats on the HUD (toggle, left / right team stats, player stats, 1 vs 1, next, and one button per stat, red while on screen); break timer (start / pause, 5 minutes, +1 minute); scorebug and casters on / off. They need the Broadcast suite mode. The **Series** presets (series control, wins, pause, timeouts) also work in this mode, and **Swap team names** makes the teams change sides there, each with its wins.
+- **Broadcast suite**: swap teams (fix) and swap colors; stats on the HUD (toggle, left / right team stats, player stats, 1 vs 1, next, and one button per stat, red while on screen); stats setup (setup stats, step, 12 choices, back, match / series, done, cancel); break timer (start / pause, 5 minutes, +1 minute); scorebug and casters on / off. They need the Broadcast suite mode. The **Series** presets (series control, wins, pause, timeouts) also work in this mode, and **Swap team names** makes the teams change sides there, each with its wins.
 
 Presets use layered buttons and need Companion 5.0 or later.
