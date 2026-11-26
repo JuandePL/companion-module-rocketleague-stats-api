@@ -10,9 +10,12 @@ import {
 	type Side,
 } from './series.js'
 import { hasPov } from './state.js'
+import { statsSetupFeedbackDefinitions, type StatsSetupFeedbacksSchema } from './stats-setup.js'
 import { suiteFeedbackDefinitions, type SuiteFeedbacksSchema } from './suite.js'
 
-export type FeedbacksSchema = SuiteFeedbacksSchema & {
+type SuiteAndStatsSetupFeedbacks = SuiteFeedbacksSchema & StatsSetupFeedbacksSchema
+
+export type FeedbacksSchema = SuiteAndStatsSetupFeedbacks & {
 	player_pov: {
 		type: 'boolean'
 		options: {
@@ -93,6 +96,7 @@ const SIDE_NOTE = 'The team playing on that side in the current match, or in the
 export function UpdateFeedbacks(self: ModuleInstance): void {
 	self.setFeedbackDefinitions({
 		...suiteFeedbackDefinitions(self),
+		...statsSetupFeedbackDefinitions(self),
 		player_pov: {
 			name: 'Player has the POV',
 			description: 'True when the spectator camera is on this player. Players are numbered as in the players variable.',

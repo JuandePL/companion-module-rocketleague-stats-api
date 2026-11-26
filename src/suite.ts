@@ -343,7 +343,8 @@ export function timerVariables(
 	return { suiteTimer: formatClock(seconds), suiteTimerSeconds: seconds, suiteTimerRunning: timer.running }
 }
 
-export function suiteVariables(state: SuiteState | undefined, connected: boolean, now: number): SuiteVariablesSchema {
+/** Name and abbreviation of the left and right teams of the suite match (the game's name for a side with no team). */
+export function suiteTeamNames(state: SuiteState | undefined): { name: [string, string]; short: [string, string] } {
 	const team = (slot: Slot) => state?.teams.find((entry) => entry.id === state.config.match.teams[slot].teamId)
 	const manual = (slot: Slot) => (team(slot) ? undefined : (state?.config.match.teams[slot].manual ?? undefined))
 	const name = (slot: Slot) => team(slot)?.name ?? manual(slot)?.name ?? state?.series.keys[slot] ?? ''
@@ -351,6 +352,13 @@ export function suiteVariables(state: SuiteState | undefined, connected: boolean
 		const set = team(slot) ?? manual(slot)
 		return (set ? set.abbreviation : state?.config.match.teams[slot].abbreviation) || name(slot)
 	}
+	return { name: [name(0), name(1)], short: [short(0), short(1)] }
+}
+
+export function suiteVariables(state: SuiteState | undefined, connected: boolean, now: number): SuiteVariablesSchema {
+	const names = suiteTeamNames(state)
+	const name = (slot: Slot) => names.name[slot]
+	const short = (slot: Slot) => names.short[slot]
 	const mode = statsMode(state)
 	const stats = state?.config.stats
 	const current = stats && stats.types.length ? stats.types[stats.index % stats.types.length] : undefined

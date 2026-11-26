@@ -2,9 +2,12 @@ import type { JsonObject, JsonValue } from '@companion-module/base'
 import type { Player, UpdateStateData } from '@juande_pl/rocketleague-stats-api-client'
 import type ModuleInstance from './main.js'
 import { formatClock } from './state.js'
+import { STATS_SETUP_VARIABLE_DEFINITIONS, type StatsSetupVariablesSchema } from './stats-setup.js'
 import { SUITE_VARIABLE_DEFINITIONS, type SuiteVariablesSchema } from './suite.js'
 
-export type VariablesSchema = SuiteVariablesSchema & {
+type SuiteAndStatsSetupVariables = SuiteVariablesSchema & StatsSetupVariablesSchema
+
+export type VariablesSchema = SuiteAndStatsSetupVariables & {
 	/** Raw `Data` of the last `UpdateState` event. */
 	state: JsonObject | null
 	/** `state.Players`, sorted by TeamNum and then Shortcut. */
@@ -109,6 +112,7 @@ export type VariablesSchema = SuiteVariablesSchema & {
 export function UpdateVariableDefinitions(self: ModuleInstance): void {
 	self.setVariableDefinitions({
 		...SUITE_VARIABLE_DEFINITIONS,
+		...STATS_SETUP_VARIABLE_DEFINITIONS,
 		state: { name: 'Last UpdateState data (JSON)' },
 		players: { name: 'Players, sorted by TeamNum and Shortcut (JSON array)' },
 		teams: { name: 'Teams (JSON array)' },
